@@ -8,6 +8,20 @@ Develop predictive analytics to identify low-risk insurance targets for premium 
 
 ## Repository Structure
 
+```
+Insurance-Analytics-Week-3-
+├─ notebooks
+│  ├─ eda_analysis.ipynb
+│  └─ statistical_analysis.ipynb
+├─ README.md
+├─ requirements.txt
+├─ src
+│  ├─ utils.py
+│  ├─ visualization.py
+│  └─ __init__.py
+└─ tests
+
+```
 
 
 ## Setup Instructions
