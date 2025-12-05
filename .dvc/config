@@ -1,4 +1,4 @@
 [core]
     remote = localstore
 ['remote "localstore"']
-    url = D:\Python\Week-3\DVC_Remote
+    url = D:\Python\Week-3\Raw_Data

@@ -10,12 +10,34 @@ Develop predictive analytics to identify low-risk insurance targets for premium 
 
 ```
 Insurance-Analytics-Week-3-
+├─ .dvc
+│  ├─ cache
+│  │  └─ files
+│  │     └─ md5
+│  │        └─ 53
+│  │           └─ f65fc5b8ea785e5fb22b1c6113a7a7
+│  ├─ config
+│  └─ tmp
+│     ├─ btime
+│     ├─ lock
+│     ├─ rwlock
+│     └─ rwlock.lock
+├─ .dvcignore
+├─ data
+│  ├─ output
+│  ├─ processed
+│  └─ raw
+│     ├─ sample_raw.txt
+│     └─ sample_raw.txt.dvc
 ├─ notebooks
 │  ├─ eda_analysis.ipynb
+│  ├─ src
+│  │  └─ data_preprocessing.py
 │  └─ statistical_analysis.ipynb
 ├─ README.md
 ├─ requirements.txt
 ├─ src
+│  ├─ data_preprocessing.py
 │  ├─ utils.py
 │  ├─ visualization.py
 │  └─ __init__.py
@@ -37,3 +59,4 @@ Insurance-Analytics-Week-3-
 
 ## Team
 Data Analytics Team - AlphaCare Insurance Solutions
+

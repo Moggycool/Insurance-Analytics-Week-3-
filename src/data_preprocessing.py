@@ -1,1255 +1,556 @@
-"""
-Data Preprocessing Module for ACIS Insurance Analytics
-Handles data loading, cleaning, transformation, and feature engineering
-"""
+"""Data preprocessing Module for Insurance Analytics"""
 
-from datetime import datetime
 import os
-import warnings
-import pandas as pd
 import numpy as np
+from typing import List, Optional, Dict, Tuple
+import pandas as pd
 
 
-warnings.filterwarnings('ignore')
-
-
-class InsuranceDataPreprocessor:
+class DataPreprocessor:
     """
-    Class for preprocessing insurance claim data
+    Enhanced class-based preprocessor for insurance datasets with domain-specific
+    validations, outlier detection, and feature engineering.
+
+    Example:
+        dp = DataPreprocessor(
+            raw_path="D:/Python/Week-3/Raw_Data/MachineLearningRating_v3.txt",
+            out_path="D:/Python/Week-3/Raw_Data/processed_MachineLearningRating_v3.txt",
+            chunksize=100_000,
+            delimiter="|"
+        )
+        dp.process(save_format="csv", create_features=True, run_quality_checks=True)
     """
 
-    def __init__(self, file_path=None):
-        """
-        Initialize preprocessor with file path
+    def __init__(
+        self,
+        raw_path: str,
+        out_path: str,
+        chunksize: int = 100_000,
+        delimiter: str = "|",
+        log_transform: bool = True
+    ):
+        self.raw_path = raw_path
+        self.out_path = out_path
+        self.chunksize = chunksize
+        self.delimiter = delimiter
+        self.log_transform = log_transform
+        self.quality_issues = []
+        self.transformation_log = []
 
-        Args:
-            file_path (str): Path to data file
-        """
-        self.file_path = file_path
-        self.df = None
-        self.raw_df = None
-        self.metadata = {}
-        self.categorical_cols = []
-        self.numerical_cols = []
-        self.quality_report = {}
-        self.outlier_report = {}
+    # -----------------------
+    # Low-level helpers
+    # -----------------------
+    @staticmethod
+    def _clean_string_columns(df: pd.DataFrame) -> pd.DataFrame:
+        """Trim whitespace, collapse repeated spaces and normalize strings (preserve NaN)."""
+        obj_cols = df.select_dtypes(include=["object"]).columns
 
-    def load_data(self, file_path=None, delimiter=None, encoding='utf-8'):
-        """
-        Load data from specified file path with intelligent detection
-
-        Args:
-            file_path (str): Path to data file
-            delimiter (str): Delimiter for text file (auto-detected if None)
-            encoding (str): File encoding
-
-        Returns:
-            pd.DataFrame: Loaded dataframe
-        """
-        if file_path:
-            self.file_path = file_path
-
-        # Use default path if not specified
-        if self.file_path is None:
-            self.file_path = 'data/raw/MachineLearningRating_v3.txt'
-
-        print(f"Loading data from: {self.file_path}")
-
-        try:
-            # Check if file exists
-            if not os.path.exists(self.file_path):
-                print(f"File not found: {self.file_path}")
-                # Try alternative paths
-                possible_paths = [
-                    self.file_path,
-                    os.path.join('..', self.file_path),
-                    os.path.join('../..', self.file_path),
-                    os.path.join(
-                        'data', 'raw', 'MachineLearningRating_v3.txt'),
-                    os.path.join('..', 'data', 'raw',
-                                 'MachineLearningRating_v3.txt'),
-                    os.path.join('../..', 'data', 'raw',
-                                 'MachineLearningRating_v3.txt'),
-                    'MachineLearningRating_v3.txt'
-                ]
-
-                for path in possible_paths:
-                    if os.path.exists(path):
-                        self.file_path = path
-                        print(f"Found file at: {path}")
-                        break
-                else:
-                    raise FileNotFoundError(
-                        print("Data file not found in any expected location"))
-
-            # Get file size
-            file_size = os.path.getsize(self.file_path)
-            print(f"File size: {file_size/1024/1024:.2f} MB")
-
-            # Try to detect encoding by trying common encodings
-            if encoding is None:
-                print("Trying to detect file encoding...")
-                possible_encodings = ['utf-8', 'latin-1',
-                                      'iso-8859-1', 'cp1252', 'utf-16']
-                for enc in possible_encodings:
-                    try:
-                        with open(self.file_path, 'r', encoding=enc) as f:
-                            f.read(1024)  # Read first 1KB to test encoding
-                        encoding = enc
-                        print(f"Encoding detected: {encoding}")
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                else:
-                    encoding = 'utf-8'
-                    print("Could not detect encoding, using utf-8 as default")
-
-            # Determine file type and load accordingly
-            file_extension = os.path.splitext(self.file_path)[1].lower()
-
-            if file_extension == '.txt':
-                self.raw_df = self._load_text_file(delimiter, encoding)
-            elif file_extension == '.csv':
-                self.raw_df = pd.read_csv(
-                    self.file_path, encoding=encoding, low_memory=False)
-                print("✓ Loaded CSV file")
-            elif file_extension in ['.xlsx', '.xls']:
-                self.raw_df = pd.read_excel(self.file_path)
-                print("✓ Loaded Excel file")
-            else:
-                # Try to load as text file with auto-detection
-                self.raw_df = self._load_text_file(delimiter, encoding)
-
-            self.df = self.raw_df.copy()
-            self.metadata['original_shape'] = self.df.shape
-            self.metadata['file_path'] = self.file_path
-            self.metadata['file_size_mb'] = file_size / (1024 * 1024)
-            self.metadata['encoding'] = encoding
-
-            print(
-                f"✓ Data loaded successfully: {self.df.shape[0]} rows, {self.df.shape[1]} columns")
-
-            return self.df
-
-        except Exception as e:
-            print(f"Error loading data: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return None
-
-    def _load_text_file(self, delimiter=None, encoding='utf-8'):
-        """
-        Load text file with intelligent delimiter detection
-
-        Args:
-            delimiter (str): Delimiter for text file
-            encoding (str): File encoding
-
-        Returns:
-            pd.DataFrame: Loaded dataframe
-        """
-        print("Loading text file with intelligent parsing...")
-
-        # First, inspect the file structure
-        try:
-            with open(self.file_path, 'r', encoding=encoding, errors='replace') as f:
-                first_lines = [next(f) for _ in range(10) if f]
-        except UnicodeDecodeError:
-            # Try with latin-1 if utf-8 fails
-            print("UTF-8 decoding failed, trying latin-1...")
-            encoding = 'latin-1'
-            with open(self.file_path, 'r', encoding=encoding, errors='replace') as f:
-                first_lines = [next(f) for _ in range(10) if f]
-
-        print("First few lines of the file (first 100 chars each):")
-        for i, line in enumerate(first_lines[:3]):
-            print(f"Line {i+1}: {line[:100].rstrip()}...")
-
-        # Try to detect delimiter if not provided
-        if delimiter is None:
-            delimiter = self._detect_delimiter(first_lines)
-            print(
-                f"Auto-detected delimiter: '{delimiter}' (shown as \\t if tab)")
-
-        # Try different parsing strategies
-        try:
-            # First attempt: Standard read with detected delimiter
-            df = pd.read_csv(
-                self.file_path,
-                delimiter=delimiter,
-                encoding=encoding,
-                low_memory=False,
-                on_bad_lines='warn'
+        for col in obj_cols:
+            df[col] = (
+                df[col]
+                .astype("string")
+                .str.strip()
+                .str.replace(r"\s+", " ", regex=True)
             )
-            print(f"✓ Successfully loaded with delimiter '{delimiter}'")
-        except Exception as e:
-            print(f"First attempt failed: {str(e)}")
+        return df
 
-            # Second attempt: Try with Python engine
-            try:
-                df = pd.read_csv(
-                    self.file_path,
-                    delimiter=delimiter,
-                    encoding=encoding,
-                    engine='python',
-                    on_bad_lines='warn'
+    @staticmethod
+    def _convert_boolean(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+        """Map common truthy/falsy strings to booleans, leave NaN as-is."""
+        mapping = {
+            "yes": True, "y": True, "true": True, "1": True,
+            "no": False, "n": False, "false": False, "0": False
+        }
+
+        for col in cols:
+            if col in df.columns:
+                df[col] = (
+                    df[col]
+                    .astype("string")
+                    .str.lower()
+                    .map(mapping)
                 )
-                print("Successfully loaded with Python engine")
-            except Exception as e2:
-                print(f"Second attempt failed: {str(e2)}")
+        return df
 
-                # Third attempt: Try reading with no header first to inspect
-                print("Trying to read without header to inspect structure...")
-                try:
-                    df_no_header = pd.read_csv(
-                        self.file_path,
-                        delimiter=delimiter,
-                        encoding=encoding,
-                        header=None,
-                        nrows=100,
-                        engine='python'
-                    )
-                    print(f"Data shape without header: {df_no_header.shape}")
-                    print("First few rows without header:")
-                    print(df_no_header.head())
+    @staticmethod
+    def _convert_numeric(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+        for col in cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
 
-                    # Ask user for number of header rows
-                    header_rows = 1  # Default assumption
-                    if len(df_no_header) > 0:
-                        # Try to find header by looking for column name patterns
-                        potential_headers = 0
-                        for i in range(min(5, len(df_no_header))):
-                            row_str = ' '.join(str(x)
-                                               for x in df_no_header.iloc[i].values)
-                            if any(keyword in row_str.lower() for keyword in
-                                   ['id', 'date', 'name', 'type', 'total', 'premium']):
-                                potential_headers += 1
+    @staticmethod
+    def _convert_dates(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+        for col in cols:
+            if col in df.columns:
+                df[col] = pd.to_datetime(
+                    df[col], errors="coerce", infer_datetime_format=True
+                )
+        return df
 
-                        if potential_headers > 0:
-                            header_rows = potential_headers
-                            print(
-                                f"Detected {header_rows} potential header rows")
+    @staticmethod
+    def _convert_to_category(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+        for col in cols:
+            if col in df.columns:
+                df[col] = df[col].astype("category")
+        return df
 
-                    # Load with appropriate header
-                    df = pd.read_csv(
-                        self.file_path,
-                        delimiter=delimiter,
-                        encoding=encoding,
-                        header=list(range(header_rows)),
-                        engine='python',
-                        on_bad_lines='skip'
-                    )
-                    print(
-                        f"✓ Successfully loaded with {header_rows} header rows")
+    # -----------------------
+    # Insurance-specific helpers
+    # -----------------------
+    def _validate_insurance_logic(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Validate and correct insurance business rules."""
+        original_shape = df.shape
 
-                except Exception as e3:
-                    print(f"All attempts failed: {str(e3)}")
-                    raise
+        # Premium should be positive
+        if "TotalPremium" in df.columns:
+            negative_premiums = (df["TotalPremium"] < 0).sum()
+            if negative_premiums > 0:
+                self.quality_issues.append(
+                    f"Fixed {negative_premiums} negative premiums")
+                df["TotalPremium"] = df["TotalPremium"].abs()
+
+        # Claims should be non-negative
+        if "TotalClaims" in df.columns:
+            negative_claims = (df["TotalClaims"] < 0).sum()
+            if negative_claims > 0:
+                self.quality_issues.append(
+                    f"Fixed {negative_claims} negative claims")
+                df["TotalClaims"] = df["TotalClaims"].clip(lower=0)
+
+        # Registration year shouldn't be in the future
+        if "RegistrationYear" in df.columns:
+            current_year = pd.Timestamp.now().year
+            future_years = (df["RegistrationYear"] > current_year).sum()
+            if future_years > 0:
+                self.quality_issues.append(
+                    f"Fixed {future_years} future registration years")
+                df["RegistrationYear"] = df["RegistrationYear"].clip(
+                    upper=current_year)
+
+        # Vehicle age should be reasonable (0-50 years)
+        if "RegistrationYear" in df.columns and "TransactionMonth" in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df["TransactionMonth"]):
+                df["VehicleAge"] = (
+                    df["TransactionMonth"].dt.year - df["RegistrationYear"]).clip(lower=0, upper=50)
+
+        self.transformation_log.append(f"Validated {original_shape[0]} rows")
+        return df
+
+    def _handle_missing_insurance_specific(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Insurance-specific missing value imputation."""
+
+        # For claims analysis, missing sum insured could be imputed with median by cover type
+        if "SumInsured" in df.columns and "CoverType" in df.columns:
+            missing_sum = df["SumInsured"].isna().sum()
+            if missing_sum > 0:
+                medians = df.groupby("CoverType")[
+                    "SumInsured"].transform("median")
+                df["SumInsured"] = df["SumInsured"].fillna(medians)
+                self.transformation_log.append(
+                    f"Imputed {missing_sum} missing SumInsured values")
+
+        # For vehicle attributes, use median by vehicle type if available
+        vehicle_cols = ["Cubiccapacity", "Kilowatts",
+                        "NumberOfDoors", "Cylinders"]
+        for col in vehicle_cols:
+            if col in df.columns:
+                missing = df[col].isna().sum()
+                if missing > 0:
+                    df[col] = df[col].fillna(df[col].median())
+                    self.transformation_log.append(
+                        f"Imputed {missing} missing {col} values")
+
+        # For categorical columns, add 'Unknown' category
+        cat_cols = ["Gender", "MaritalStatus", "Country", "Province"]
+        for col in cat_cols:
+            if col in df.columns:
+                missing = df[col].isna().sum()
+                if missing > 0:
+                    if pd.api.types.is_categorical_dtype(df[col]):
+                        df[col] = df[col].cat.add_categories(["Unknown"])
+                    df[col] = df[col].fillna("Unknown")
 
         return df
 
-    def _detect_delimiter(self, sample_lines):
-        """
-        Detect delimiter from sample lines
+    def _detect_insurance_outliers(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Detect and handle outliers specific to insurance data."""
 
-        Args:
-            sample_lines (list): Sample lines from file
+        # Premium outliers (winsorize at 99.5th percentile)
+        if "TotalPremium" in df.columns:
+            upper_limit = df["TotalPremium"].quantile(0.995)
+            extreme_premiums = (df["TotalPremium"] > upper_limit).sum()
+            if extreme_premiums > 0:
+                df["TotalPremium"] = df["TotalPremium"].clip(upper=upper_limit)
+                self.quality_issues.append(
+                    f"Winsorized {extreme_premiums} extreme premium values")
 
-        Returns:
-            str: Detected delimiter
-        """
-        possible_delimiters = ['\t', ',', ';', '|', ' ']
-        delimiter_counts = {}
+        # Claim amount outliers (winsorize at 99th percentile)
+        if "TotalClaims" in df.columns:
+            upper_limit = df["TotalClaims"].quantile(0.99)
+            extreme_claims = (df["TotalClaims"] > upper_limit).sum()
+            if extreme_claims > 0:
+                df["TotalClaims"] = df["TotalClaims"].clip(upper=upper_limit)
+                self.quality_issues.append(
+                    f"Winsorized {extreme_claims} extreme claim values")
 
-        for delim in possible_delimiters:
-            delimiter_counts[delim] = sum(
-                line.count(delim) for line in sample_lines)
+        # Sum insured should be reasonable (upper bound)
+        if "SumInsured" in df.columns:
+            upper_limit = df["SumInsured"].quantile(0.999)
+            extreme_sums = (df["SumInsured"] > upper_limit).sum()
+            if extreme_sums > 0:
+                df["SumInsured"] = df["SumInsured"].clip(upper=upper_limit)
 
-        # Find delimiter with maximum and consistent count
-        for delim in ['\t', ',', ';', '|']:  # Check common delimiters first
-            if delimiter_counts[delim] > 0:
-                counts = [line.count(delim) for line in sample_lines]
-                if all(count == counts[0] for count in counts) and counts[0] > 0:
-                    print(
-                        f"Consistent delimiter found: '{delim}' with {counts[0]} columns")
-                    return delim
+        return df
 
-        # If no consistent delimiter found, use the most common one
-        detected_delimiter = max(delimiter_counts, key=delimiter_counts.get)
-        print(
-            f"Using most common delimiter: '{detected_delimiter}' with {delimiter_counts[detected_delimiter]} total occurrences")
+    def _create_insurance_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Create features useful for insurance risk modeling."""
 
-        return detected_delimiter
+        # 1. Loss Ratio (key insurance metric)
+        if all(col in df.columns for col in ["TotalClaims", "TotalPremium"]):
+            df["LossRatio"] = df["TotalClaims"] / \
+                (df["TotalPremium"].replace(0, np.nan) + 1e-10)
+            df["LossRatio"] = df["LossRatio"].clip(
+                lower=0, upper=10)  # Cap at 1000%
 
-    def inspect_data_structure(self):
-        """
-        Inspect and print data structure information
-        """
-        if self.df is None:
-            print("No data loaded. Please load data first.")
-            return
+        # 2. Premium per unit sum insured (Rate)
+        if all(col in df.columns for col in ["CalculatedPremiumPerTerm", "SumInsured"]):
+            df["PremiumRate"] = df["CalculatedPremiumPerTerm"] / \
+                (df["SumInsured"] + 1e-10)
 
-        print("=" * 80)
-        print("DATA STRUCTURE INSPECTION")
-        print("=" * 80)
+        # 3. Boolean flag for claims presence
+        if "TotalClaims" in df.columns:
+            df["HasClaim"] = (df["TotalClaims"] > 0).astype("int8")
 
-        print(
-            f"\nDataset shape: {self.df.shape[0]} rows, {self.df.shape[1]} columns")
+        # 4. Claim frequency indicator
+        if "TotalClaims" in df.columns and "TotalPremium" in df.columns:
+            df["ClaimIndicator"] = np.where(df["TotalClaims"] > 0, 1, 0)
 
-        print("\nFirst 5 rows:")
-        print(self.df.head())
+        # 5. Log transformations for skewed monetary variables
+        if self.log_transform:
+            monetary_cols = ["TotalPremium", "TotalClaims",
+                             "SumInsured", "CalculatedPremiumPerTerm"]
+            for col in monetary_cols:
+                if col in df.columns:
+                    # Add small constant to avoid log(0)
+                    df[f"Log_{col}"] = np.log1p(df[col].clip(lower=0))
 
-        print("\nColumn names and data types:")
-        dtype_summary = self.df.dtypes.value_counts()
-        for dtype, count in dtype_summary.items():
-            print(f"  {dtype}: {count} columns")
+        # 6. Vehicle age if not already calculated
+        if "VehicleAge" not in df.columns and "RegistrationYear" in df.columns:
+            if "TransactionMonth" in df.columns and pd.api.types.is_datetime64_any_dtype(df["TransactionMonth"]):
+                df["VehicleAge"] = (
+                    df["TransactionMonth"].dt.year - df["RegistrationYear"]).clip(lower=0)
 
-        print("\nDetailed column information:")
-        for i, (col, dtype) in enumerate(self.df.dtypes.items()):
-            unique_count = self.df[col].nunique(
-            ) if col in self.df.columns else 0
-            missing_count = self.df[col].isnull(
-            ).sum() if col in self.df.columns else 0
-            print(f"{i+1:3}. {col:<30} : {dtype:<15} | Unique: {unique_count:>5} | Missing: {missing_count:>5} ({missing_count/len(self.df)*100:.1f}%)")
+        return df
 
-        print(
-            f"\nMemory usage: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+    def _run_data_quality_checks(self, df: pd.DataFrame):
+        """Run insurance-specific data quality checks."""
 
-        # Check for multi-index columns
-        if isinstance(self.df.columns, pd.MultiIndex):
-            print("\n⚠ Multi-level columns detected:")
-            for i, level in enumerate(self.df.columns.levels):
-                print(f"  Level {i}: {len(level)} unique values")
+        print("\n" + "="*60)
+        print("DATA QUALITY CHECKS")
+        print("="*60)
 
-    def validate_data_structure(self):
-        """
-        Validate and convert data types
-        """
-        if self.df is None:
-            print("No data loaded. Please load data first.")
-            return
+        checks = []
 
-        print("=" * 80)
-        print("DATA TYPE VALIDATION")
-        print("=" * 80)
+        # Check 1: Policy dates consistency
+        if "TransactionMonth" in df.columns:
+            future_dates = (df["TransactionMonth"] > pd.Timestamp.now()).sum()
+            if future_dates > 0:
+                checks.append(
+                    f"⚠️ {future_dates} future transaction dates found")
 
-        # Flatten multi-index columns if they exist
-        if isinstance(self.df.columns, pd.MultiIndex):
-            print("Flattening multi-index columns...")
-            self.df.columns = [
-                '_'.join(filter(None, map(str, col))).strip() for col in self.df.columns]
-            print(f"New column names: {list(self.df.columns[:10])}...")
+        # Check 2: Negative values in monetary columns
+        monetary_cols = ["TotalPremium", "TotalClaims", "SumInsured"]
+        for col in monetary_cols:
+            if col in df.columns:
+                negative = (df[col] < 0).sum()
+                if negative > 0:
+                    checks.append(f"⚠️ {negative} negative values in {col}")
 
-        # Standardize column names
-        print("\nStandardizing column names...")
-        original_columns = self.df.columns.tolist()
-        self.df.columns = [col.strip().replace(' ', '_').replace('-', '_').replace('.', '_').lower()
-                           for col in self.df.columns]
+        # Check 3: Claim > Sum Insured (possible data error)
+        if all(col in df.columns for col in ["TotalClaims", "SumInsured"]):
+            claim_exceed = (df["TotalClaims"] > df["SumInsured"]).sum()
+            if claim_exceed > 0:
+                checks.append(f"⚠️ {claim_exceed} claims exceed sum insured")
 
-        # Create mapping of original to standardized names
-        column_mapping = dict(zip(original_columns, self.df.columns))
-        self.metadata['column_mapping'] = column_mapping
+        # Check 4: Missing critical fields
+        critical_fields = ["PolicyID", "TransactionMonth", "TotalPremium"]
+        for field in critical_fields:
+            if field in df.columns:
+                missing_pct = df[field].isna().mean() * 100
+                if missing_pct > 5:
+                    checks.append(
+                        f"⚠️ {missing_pct:.1f}% missing values in {field}")
 
-        print(f"Standardized {len(column_mapping)} column names")
-        print("Sample mapping:")
-        for orig, new in list(column_mapping.items())[:10]:
-            print(f"  {orig} → {new}")
+        # Check 5: Duplicate policy IDs (if applicable)
+        if "PolicyID" in df.columns:
+            duplicates = df.duplicated(subset=["PolicyID"], keep=False).sum()
+            if duplicates > 0:
+                checks.append(f"⚠️ {duplicates} duplicate PolicyID entries")
 
-        # Date columns conversion
-        date_patterns = {
-            'transactionmonth': ['transactionmonth', 'transaction_month', 'trans_month', 'month', 'date'],
-            'vehicleintrodate': ['vehicleintrodate', 'vehicle_intro_date', 'intro_date', 'vehicledate'],
-            'registrationyear': ['registrationyear', 'reg_year', 'registration_year']
-        }
-
-        print("\nDate column conversion:")
-        for target_col, possible_names in date_patterns.items():
-            found_col = None
-            for name in possible_names:
-                if name in self.df.columns:
-                    found_col = name
-                    break
-
-            if found_col:
-                try:
-                    if target_col == 'registrationyear':
-                        # Handle registration year as integer or date
-                        self.df[target_col] = pd.to_numeric(
-                            self.df[found_col], errors='coerce').fillna(0).astype(int)
-                        print(
-                            f"✓ {found_col} → {target_col}: Converted to integer year")
-                    else:
-                        self.df[target_col] = pd.to_datetime(
-                            self.df[found_col], errors='coerce')
-                        print(
-                            f"✓ {found_col} → {target_col}: Converted to datetime")
-                except Exception as e:
-                    print(f"✗ {found_col}: Could not convert - {str(e)}")
-            else:
-                # Try to find columns with date-like names
-                date_like_cols = [col for col in self.df.columns if any(
-                    term in col.lower() for term in ['date', 'month', 'year', 'time'])]
-                # Check first 3 date-like columns
-                for col in date_like_cols[:3]:
-                    try:
-                        sample = self.df[col].dropna(
-                        ).iloc[0] if not self.df[col].dropna().empty else None
-                        if sample and (isinstance(sample, str) and any(char.isdigit() for char in str(sample))):
-                            self.df[f"{col}_as_date"] = pd.to_datetime(
-                                self.df[col], errors='coerce')
-                            print(
-                                f"✓ Found date-like column: {col} (added as {col}_as_date)")
-                    except:
-                        pass
-
-        # Categorical columns identification
-        self.categorical_cols = self.df.select_dtypes(
-            include=['object']).columns.tolist()
-        self.numerical_cols = self.df.select_dtypes(
-            include=[np.number]).columns.tolist()
-
-        print(f"\n✓ Categorical columns: {len(self.categorical_cols)}")
-        print(f"✓ Numerical columns: {len(self.numerical_cols)}")
-
-        self.metadata['categorical_cols'] = self.categorical_cols
-        self.metadata['numerical_cols'] = self.numerical_cols
-
-        # Check for specific required columns
-        required_columns = ['totalpremium', 'totalclaims',
-                            'suminsured', 'province', 'vehicletype']
-        missing_required = [
-            col for col in required_columns if col not in self.df.columns]
-
-        if missing_required:
-            print(f"\n⚠ Warning: Missing required columns: {missing_required}")
-
-            # Try to find similar column names
-            print("Looking for similar column names...")
-            all_columns = self.df.columns.tolist()
-            for missing_col in missing_required:
-                similar = [col for col in all_columns if missing_col in col.lower(
-                ) or col.lower() in missing_col]
-                if similar:
-                    print(f"  {missing_col} might be: {similar}")
-
-                    # Create aliases for similar columns
-                    for sim_col in similar:
-                        if sim_col not in self.df.columns:
-                            continue
-                        alias_name = missing_col
-                        self.df[alias_name] = self.df[sim_col]
-                        print(f"    Created alias: {sim_col} → {alias_name}")
+        if checks:
+            for check in checks:
+                print(check)
         else:
-            print("\n✓ All required columns found or created")
+            print("✅ All data quality checks passed")
 
-        print("\n✓ Data structure validation complete")
+        # Print summary statistics
+        print("\n" + "="*60)
+        print("SUMMARY STATISTICS")
+        print("="*60)
 
-    def assess_data_quality(self, save_report=True):
+        if "TotalPremium" in df.columns:
+            print(f"Total Premium: ${df['TotalPremium'].sum():,.2f}")
+            print(f"Average Premium: ${df['TotalPremium'].mean():,.2f}")
+
+        if "TotalClaims" in df.columns:
+            print(f"Total Claims: ${df['TotalClaims'].sum():,.2f}")
+            print(f"Claim Frequency: {(df['TotalClaims'] > 0).mean():.2%}")
+
+        if "LossRatio" in df.columns:
+            print(f"Average Loss Ratio: {df['LossRatio'].mean():.2%}")
+
+    # -----------------------
+    # Chunk preprocessing
+    # -----------------------
+    def _preprocess_chunk(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply the column-aware preprocessing to a single DataFrame chunk."""
+
+        original_size = len(df)
+
+        # 1) Policy fields
+        for col in ["UnderwrittenCoverID", "PolicyID"]:
+            if col in df.columns:
+                df[col] = df[col].astype(str)
+
+        df = self._convert_dates(df, ["TransactionMonth"])
+
+        # 2) Client fields
+        client_cat_cols = [
+            "Citizenship", "LegalType", "Title", "Language",
+            "Bank", "AccountType", "MaritalStatus", "Gender"
+        ]
+        df = self._convert_to_category(df, client_cat_cols)
+        df = self._convert_boolean(df, ["IsVATRegistered"])
+
+        # 3) Location
+        df = self._convert_to_category(
+            df, ["Country", "Province", "MainCrestaZone", "SubCrestaZone"]
+        )
+        if "PostalCode" in df.columns:
+            df["PostalCode"] = df["PostalCode"].astype(str)
+
+        # 4) Vehicle
+        vehicle_numeric_cols = [
+            "RegistrationYear", "Cylinders", "Cubiccapacity", "Kilowatts",
+            "NumberOfDoors", "CustomValueEstimate", "CapitalOutstanding",
+            "NumberOfVehiclesInFleet"
+        ]
+        df = self._convert_numeric(df, vehicle_numeric_cols)
+
+        df = self._convert_boolean(
+            df, ["NewVehicle", "WrittenOff",
+                 "Rebuilt", "Converted", "CrossBorder"]
+        )
+
+        df = self._convert_dates(df, ["VehicleIntroDate"])
+
+        # 5) Plan/Product
+        df = self._convert_numeric(
+            df, ["SumInsured", "CalculatedPremiumPerTerm", "ExcessSelected"]
+        )
+
+        df = self._convert_to_category(
+            df,
+            [
+                "CoverCategory", "CoverType", "CoverGroup",
+                "Section", "Product", "StatutoryClass", "StatutoryRiskType"
+            ]
+        )
+
+        # 6) Premium & Claims
+        df = self._convert_numeric(df, ["TotalPremium", "TotalClaims"])
+
+        # 7) Insurance-specific validations and outlier handling
+        df = self._validate_insurance_logic(df)
+        df = self._detect_insurance_outliers(df)
+
+        # 8) Handle missing values
+        df = self._handle_missing_insurance_specific(df)
+
+        # 9) Global cleaning
+        df = self._clean_string_columns(df)
+
+        # 10) Remove duplicates within chunk
+        df.drop_duplicates(inplace=True)
+
+        self.transformation_log.append(
+            f"Chunk processed: {original_size} → {len(df)} rows")
+
+        return df
+
+    # -----------------------
+    # I/O helpers
+    # -----------------------
+    def _iter_read_chunks(self):
+        """Yield chunks safely from the raw text file."""
+        return pd.read_csv(
+            self.raw_path,
+            sep=self.delimiter,
+            chunksize=self.chunksize,
+            low_memory=False,
+            dtype=str,
+            encoding="utf-8",
+            encoding_errors="replace",
+        )
+
+    @staticmethod
+    def _ensure_dir_for_path(path: str):
+        directory = os.path.dirname(path)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
+
+    def _save_dataframe(self, df: pd.DataFrame, path: str, save_fmt: str = "csv"):
+        """Save df to path. save_fmt: 'csv' or 'parquet'."""
+        self._ensure_dir_for_path(path)
+
+        if save_fmt == "parquet":
+            df.to_parquet(path, index=False, compression='snappy')
+        else:
+            df.to_csv(path, sep=self.delimiter, index=False)
+
+    # -----------------------
+    # Public entrypoint
+    # -----------------------
+    def process(self,
+                save_format: str = "csv",
+                sample_nrows: Optional[int] = None,
+                create_features: bool = True,
+                run_quality_checks: bool = True) -> pd.DataFrame:
         """
-        Assess data quality including missing values and basic statistics
+        Run enhanced preprocessing pipeline with insurance-specific steps.
 
         Args:
-            save_report (bool): Whether to save quality report to file
+            save_format: 'csv' or 'parquet'
+            sample_nrows: limit rows for quick testing
+            create_features: whether to create derived insurance features
+            run_quality_checks: whether to run data quality checks
 
         Returns:
-            dict: Quality assessment report
+            Final cleaned DataFrame
         """
-        if self.df is None:
-            print("No data loaded. Please load data first.")
-            return None
+        assert save_format in ("csv", "parquet")
 
-        print("=" * 80)
-        print("DATA QUALITY ASSESSMENT")
-        print("=" * 80)
+        chunks = []
+        processed_rows = 0
 
-        quality_report = {}
+        print(f"🔄 Loading raw data from: {self.raw_path}")
+        print(f"📊 Chunk size: {self.chunksize:,}")
+        print(f"🎯 Target format: {save_format.upper()}")
 
-        # 1. Missing values analysis
-        print("\n1. Missing Values Analysis:")
-        missing_data = self.df.isnull().sum()
-        missing_percentage = (missing_data / len(self.df)) * 100
+        for i, chunk in enumerate(self._iter_read_chunks()):
+            print(f"👉 Processing chunk {i+1} (size: {len(chunk):,})")
 
-        quality_report['missing_values'] = pd.DataFrame({
-            'missing_count': missing_data,
-            'missing_percentage': missing_percentage
-        }).sort_values('missing_percentage', ascending=False)
+            cleaned = self._preprocess_chunk(chunk)
+            chunks.append(cleaned)
+            processed_rows += len(cleaned)
 
-        # Display top columns with missing values
-        top_missing = quality_report['missing_values'].head(15)
-        print("Top 15 columns with missing values:")
-        for idx, row in top_missing.iterrows():
-            print(
-                f"  {idx:<35}: {row['missing_count']:>8} ({row['missing_percentage']:>6.2f}%)")
-
-        total_missing = missing_data.sum()
-        total_cells = self.df.shape[0] * self.df.shape[1]
-        missing_overall_pct = (total_missing / total_cells) * 100
-        print(
-            f"\nOverall missing values: {total_missing:,} / {total_cells:,} ({missing_overall_pct:.2f}%)")
-
-        # 2. Duplicate analysis
-        print("\n2. Duplicate Analysis:")
-        duplicate_rows = self.df.duplicated().sum()
-        duplicate_percentage = (duplicate_rows / len(self.df)) * 100
-
-        quality_report['duplicate_rows'] = duplicate_rows
-        quality_report['duplicate_percentage'] = duplicate_percentage
-
-        print(
-            f"Exact duplicate rows: {duplicate_rows:,} ({duplicate_percentage:.2f}%)")
-
-        # Check for near duplicates based on key columns
-        key_columns = [col for col in ['underwrittencoverid', 'policyid', 'totalpremium', 'totalclaims']
-                       if col in self.df.columns]
-        if len(key_columns) >= 2:
-            near_duplicates = self.df.duplicated(
-                subset=key_columns, keep=False).sum()
-            near_dup_percentage = (near_duplicates / len(self.df)) * 100
-            quality_report['near_duplicates'] = near_duplicates
-            quality_report['near_duplicate_percentage'] = near_dup_percentage
-            print(
-                f"Near duplicates (based on key columns): {near_duplicates:,} ({near_dup_percentage:.2f}%)")
-
-        # 3. Unique values analysis
-        print("\n3. Unique Values Analysis:")
-        unique_counts = {}
-
-        # For categorical columns
-        print("Categorical columns (unique values):")
-        # Limit to first 15 for performance
-        for col in self.categorical_cols[:15]:
-            unique_counts[col] = self.df[col].nunique()
-            # Only show columns with reasonable number of categories
-            if unique_counts[col] < 50:
-                print(f"  {col:<35}: {unique_counts[col]:>6} unique values")
-
-        # For numerical columns, check cardinality
-        print("\nNumerical columns (cardinality):")
-        for col in self.numerical_cols[:15]:
-            unique_pct = (self.df[col].nunique() / len(self.df)) * 100
-            if unique_pct < 10:  # Low cardinality numerical columns
+            if sample_nrows and processed_rows >= sample_nrows:
                 print(
-                    f"  {col:<35}: {self.df[col].nunique():>6} unique ({unique_pct:.1f}%)")
+                    f"⏱ Sample limit reached ({sample_nrows} rows) — stopping early.")
+                break
 
-        quality_report['unique_counts'] = unique_counts
+        print("🧹 Combining all cleaned chunks...")
+        df_final = pd.concat(
+            chunks, ignore_index=True) if chunks else pd.DataFrame()
 
-        # 4. Basic statistics for numerical columns
-        print("\n4. Basic Statistics for Key Columns:")
-        financial_cols = ['totalpremium', 'totalclaims',
-                          'suminsured', 'calculatedpremiumperterm']
-        available_financial = [
-            col for col in financial_cols if col in self.df.columns]
+        # Remove duplicates across chunks
+        initial_rows = len(df_final)
+        df_final.drop_duplicates(inplace=True)
+        duplicates_removed = initial_rows - len(df_final)
+        if duplicates_removed > 0:
+            self.transformation_log.append(
+                f"Removed {duplicates_removed} duplicate rows across chunks")
 
-        if available_financial:
-            stats_df = self.df[available_financial].describe().T
-            stats_df['zeros'] = [(self.df[col] == 0).sum()
-                                 for col in available_financial]
-            stats_df['zeros_pct'] = stats_df['zeros'] / len(self.df) * 100
+        # Create insurance features on the final combined dataset
+        if create_features:
+            print("🔧 Creating insurance-specific features...")
+            df_final = self._create_insurance_features(df_final)
 
-            print("\nFinancial Columns Summary:")
-            display_cols = ['count', 'mean', 'std', 'min',
-                            '25%', '50%', '75%', 'max', 'zeros', 'zeros_pct']
-            display_stats = stats_df[display_cols].copy()
-            display_stats.columns = [
-                'Count', 'Mean', 'Std', 'Min', 'Q1', 'Median', 'Q3', 'Max', 'Zeros', 'Zeros%']
+        # Run data quality checks
+        if run_quality_checks:
+            self._run_data_quality_checks(df_final)
 
-            for idx, row in display_stats.iterrows():
-                print(f"\n{idx}:")
-                for col in display_stats.columns:
-                    if col in ['Zeros%']:
-                        print(f"  {col:<8}: {row[col]:>10.2f}%")
-                    elif col in ['Mean', 'Std']:
-                        print(f"  {col:<8}: {row[col]:>10,.2f}")
-                    else:
-                        print(f"  {col:<8}: {row[col]:>10,}")
+        # Print transformation log
+        if self.transformation_log:
+            print("\n" + "="*60)
+            print("TRANSFORMATION LOG")
+            print("="*60)
+            for log_entry in self.transformation_log:
+                print(f"• {log_entry}")
 
-            quality_report['financial_stats'] = stats_df
+        # Print quality issues
+        if self.quality_issues:
+            print("\n" + "="*60)
+            print("QUALITY ISSUES RESOLVED")
+            print("="*60)
+            for issue in self.quality_issues:
+                print(f"• {issue}")
 
-        # 5. Data type distribution
-        print("\n5. Data Type Distribution:")
-        dtype_dist = self.df.dtypes.value_counts()
-        for dtype, count in dtype_dist.items():
-            print(f"  {str(dtype):<20}: {count:>5} columns")
+        # Auto-fix extension
+        out_path = self.out_path
+        if save_format == "parquet":
+            if not out_path.lower().endswith(".parquet"):
+                out_path = os.path.splitext(out_path)[0] + ".parquet"
+        else:
+            if not (out_path.lower().endswith(".txt") or out_path.lower().endswith(".csv")):
+                out_path = os.path.splitext(out_path)[0] + ".txt"
 
-        quality_report['dtype_distribution'] = dtype_dist
+        print(f"\n💾 Saving cleaned file to: {out_path}")
+        self._save_dataframe(df_final, out_path, save_fmt=save_format)
 
-        # 6. Memory usage
-        memory_by_column = self.df.memory_usage(deep=True)
-        total_memory_mb = memory_by_column.sum() / 1024**2
-
-        print(f"\n6. Memory Usage:")
-        print(f"  Total memory: {total_memory_mb:.2f} MB")
+        print("\n" + "="*60)
+        print("✅ PREPROCESSING COMPLETED SUCCESSFULLY!")
+        print("="*60)
+        print(f"📁 Output file: {out_path}")
+        print(f"📊 Final dataset shape: {df_final.shape}")
         print(
-            f"  Average per column: {total_memory_mb / len(self.df.columns):.2f} MB")
-
-        # Top memory consuming columns
-        top_memory = memory_by_column.nlargest(10) / 1024**2
-        print("\n  Top 10 memory-consuming columns:")
-        for col, mem in top_memory.items():
-            print(f"    {col:<35}: {mem:>8.2f} MB")
-
-        quality_report['memory_usage'] = {
-            'total_mb': total_memory_mb,
-            'by_column_mb': (memory_by_column / 1024**2).to_dict()
-        }
-
-        # 7. Date range analysis
-        print("\n7. Date Range Analysis:")
-        date_cols = self.df.select_dtypes(include=['datetime64']).columns
-        if len(date_cols) > 0:
-            for col in date_cols:
-                min_date = self.df[col].min()
-                max_date = self.df[col].max()
-                date_range = (
-                    max_date - min_date).days if pd.notnull(min_date) and pd.notnull(max_date) else None
-
-                print(
-                    f"  {col:<20}: {min_date} to {max_date} ({date_range} days)")
-
-                quality_report['date_ranges'] = quality_report.get(
-                    'date_ranges', {})
-                quality_report['date_ranges'][col] = {
-                    'min': min_date,
-                    'max': max_date,
-                    'range_days': date_range
-                }
-        else:
-            print("  No datetime columns found")
-
-        # 8. Basic dataset statistics
-        quality_report['basic_stats'] = {
-            'total_rows': len(self.df),
-            'total_columns': len(self.df.columns),
-            'total_cells': total_cells,
-            'total_missing': total_missing,
-            'missing_percentage': missing_overall_pct,
-            'memory_usage_mb': total_memory_mb,
-        }
-
-        # Calculate data quality score
-        completeness_score = 100 - missing_overall_pct
-        uniqueness_score = 100 - duplicate_percentage
-        quality_score = (completeness_score * 0.7) + (uniqueness_score * 0.3)
-
-        quality_report['quality_score'] = {
-            'completeness': completeness_score,
-            'uniqueness': uniqueness_score,
-            'overall': quality_score
-        }
-
-        print(f"\n8. Data Quality Score: {quality_score:.1f}/100")
-        print(f"   - Completeness: {completeness_score:.1f}/100")
-        print(f"   - Uniqueness: {uniqueness_score:.1f}/100")
-
-        self.quality_report = quality_report
-
-        # Save report if requested
-        if save_report:
-            self._save_quality_report(quality_report)
-
-        return quality_report
-
-    def _save_quality_report(self, quality_report):
-        """Save quality report to CSV files"""
-
-        os.makedirs('../data/outputs', exist_ok=True)
-
-        # Save missing values summary
-        if 'missing_values' in quality_report:
-            quality_report['missing_values'].to_csv(
-                '../data/outputs/missing_values_summary.csv')
-            print(
-                "✓ Saved missing values summary to data/outputs/missing_values_summary.csv")
-
-        # Save basic stats
-        if 'basic_stats' in quality_report:
-            pd.Series(quality_report['basic_stats']).to_csv(
-                '../data/outputs/basic_stats.csv')
-            print("✓ Saved basic statistics to data/outputs/basic_stats.csv")
-
-        # Save financial stats
-        if 'financial_stats' in quality_report:
-            quality_report['financial_stats'].to_csv(
-                '../data/outputs/financial_stats.csv')
-            print("✓ Saved financial statistics to data/outputs/financial_stats.csv")
-
-    def handle_missing_values(self, strategy='median', categorical_strategy='unknown'):
-        """
-        Handle missing values based on specified strategy
-
-        Args:
-            strategy (str): Strategy for numerical columns ('mean', 'median', 'mode', 'drop', 'interpolate')
-            categorical_strategy (str): Strategy for categorical columns ('mode', 'drop', 'unknown', 'missing')
-        """
-        if self.df is None:
-            print("No data loaded. Please load data first.")
-            return
-
-        print("=" * 80)
-        print("HANDLING MISSING VALUES")
-        print("=" * 80)
-
-        initial_missing = self.df.isnull().sum().sum()
-        print(f"Total missing values before handling: {initial_missing:,}")
-
-        # Handle numerical columns
-        num_cols_with_missing = [
-            col for col in self.numerical_cols if self.df[col].isnull().any()]
-
-        if num_cols_with_missing:
-            print(
-                f"\nHandling missing values in {len(num_cols_with_missing)} numerical columns...")
-
-            for col in num_cols_with_missing:
-                missing_count = self.df[col].isnull().sum()
-                missing_pct = (missing_count / len(self.df)) * 100
-
-                if missing_pct > 50:
-                    print(
-                        f"  ⚠ {col:<35}: {missing_count:>6} missing ({missing_pct:>5.1f}%) - Too many missing, considering dropping")
-                    if strategy == 'drop':
-                        self.df.dropna(subset=[col], inplace=True)
-                        print(f"    Dropped rows with missing {col}")
-                    else:
-                        # For columns with >50% missing, use a conservative approach
-                        if self.df[col].dtype in [np.int64, np.int32]:
-                            self.df[col].fillna(0, inplace=True)
-                            print(f"    Filled with 0 (integer column)")
-                        else:
-                            self.df[col].fillna(
-                                self.df[col].median(), inplace=True)
-                            print(f"    Filled with median")
-                else:
-                    if strategy == 'mean':
-                        fill_value = self.df[col].mean()
-                        self.df[col].fillna(fill_value, inplace=True)
-                        print(
-                            f"  ✓ {col:<35}: Filled {missing_count:>6} values with mean ({fill_value:.2f})")
-                    elif strategy == 'median':
-                        fill_value = self.df[col].median()
-                        self.df[col].fillna(fill_value, inplace=True)
-                        print(
-                            f"  ✓ {col:<35}: Filled {missing_count:>6} values with median ({fill_value:.2f})")
-                    elif strategy == 'mode':
-                        fill_value = self.df[col].mode(
-                        )[0] if not self.df[col].mode().empty else 0
-                        self.df[col].fillna(fill_value, inplace=True)
-                        print(
-                            f"  ✓ {col:<35}: Filled {missing_count:>6} values with mode ({fill_value})")
-                    elif strategy == 'interpolate':
-                        self.df[col] = self.df[col].interpolate(
-                            method='linear', limit_direction='both')
-                        print(
-                            f"  ✓ {col:<35}: Interpolated {missing_count:>6} values")
-                    elif strategy == 'drop':
-                        self.df.dropna(subset=[col], inplace=True)
-                        print(
-                            f"  ✓ {col:<35}: Dropped rows with missing values")
-
-        # Handle categorical columns
-        cat_cols_with_missing = [
-            col for col in self.categorical_cols if self.df[col].isnull().any()]
-
-        if cat_cols_with_missing:
-            print(
-                f"\nHandling missing values in {len(cat_cols_with_missing)} categorical columns...")
-
-            for col in cat_cols_with_missing:
-                missing_count = self.df[col].isnull().sum()
-                missing_pct = (missing_count / len(self.df)) * 100
-
-                if missing_pct > 30:
-                    print(
-                        f"  ⚠ {col:<35}: {missing_count:>6} missing ({missing_pct:>5.1f}%) - High missing percentage")
-
-                if categorical_strategy == 'mode':
-                    if not self.df[col].mode().empty:
-                        fill_value = self.df[col].mode()[0]
-                        self.df[col].fillna(fill_value, inplace=True)
-                        print(
-                            f"  ✓ {col:<35}: Filled {missing_count:>6} values with mode ('{fill_value}')")
-                    else:
-                        self.df[col].fillna('Unknown', inplace=True)
-                        print(
-                            f"  ✓ {col:<35}: Filled {missing_count:>6} values with 'Unknown'")
-                elif categorical_strategy == 'unknown':
-                    self.df[col].fillna('Unknown', inplace=True)
-                    print(
-                        f"  ✓ {col:<35}: Filled {missing_count:>6} values with 'Unknown'")
-                elif categorical_strategy == 'missing':
-                    self.df[col].fillna('Missing', inplace=True)
-                    print(
-                        f"  ✓ {col:<35}: Filled {missing_count:>6} values with 'Missing'")
-                elif categorical_strategy == 'drop':
-                    self.df.dropna(subset=[col], inplace=True)
-                    print(f"  ✓ {col:<35}: Dropped rows with missing values")
-
-        final_missing = self.df.isnull().sum().sum()
-        reduction = initial_missing - final_missing
-
-        print(f"\n{'='*50}")
-        print(f"Missing values handled:")
-        print(f"  Before: {initial_missing:,}")
-        print(f"  After:  {final_missing:,}")
-        print(
-            f"  Reduction: {reduction:,} ({reduction/initial_missing*100:.1f}%)")
-        print(f"{'='*50}")
-
-        # Update metadata
-        self.metadata['missing_values_handled'] = {
-            'initial': initial_missing,
-            'final': final_missing,
-            'reduction': reduction,
-            'strategy': strategy,
-            'categorical_strategy': categorical_strategy
-        }
-
-    def engineer_features(self):
-        """
-        Create new features for analysis
-        """
-        if self.df is None:
-            print("No data loaded. Please load data first.")
-            return
-
-        print("=" * 80)
-        print("FEATURE ENGINEERING")
-        print("=" * 80)
-
-        original_cols = set(self.df.columns)
-        new_features = []
-
-        # 1. Calculate Loss Ratio
-        if all(col in self.df.columns for col in ['totalclaims', 'totalpremium']):
-            self.df['lossratio'] = self.df['totalclaims'] / \
-                self.df['totalpremium'].replace(0, np.nan)
-            self.df['lossratio'].fillna(0, inplace=True)
-            new_features.append('lossratio')
-            print("✓ Created feature: lossratio (TotalClaims / TotalPremium)")
-
-            # Binary claim indicator
-            self.df['has_claim'] = (self.df['totalclaims'] > 0).astype(int)
-            new_features.append('has_claim')
-            print("✓ Created feature: has_claim (1 if claim > 0)")
-
-            # Claim severity
-            self.df['claim_severity'] = self.df['totalclaims'] / \
-                self.df['totalpremium'].replace(0, np.nan)
-            self.df['claim_severity'].fillna(0, inplace=True)
-            new_features.append('claim_severity')
-            print("✓ Created feature: claim_severity")
-
-        # 2. Vehicle-related features
-        if 'registrationyear' in self.df.columns:
-            current_year = datetime.now().year
-            self.df['vehicle_age'] = current_year - self.df['registrationyear']
-            self.df['vehicle_age'] = self.df['vehicle_age'].clip(
-                lower=0, upper=50)  # Clip unrealistic values
-            new_features.append('vehicle_age')
-            print("✓ Created feature: vehicle_age")
-
-            # Age categories
-            bins = [0, 3, 7, 12, 20, 100]
-            labels = ['New (0-3)', 'Young (4-7)', 'Mid (8-12)',
-                      'Old (13-20)', 'Vintage (20+)']
-            self.df['vehicle_age_category'] = pd.cut(
-                self.df['vehicle_age'], bins=bins, labels=labels, right=False)
-            new_features.append('vehicle_age_category')
-            print("✓ Created feature: vehicle_age_category")
-
-        # 3. Premium-related features
-        if all(col in self.df.columns for col in ['totalpremium', 'customvalueestimate']):
-            self.df['premium_to_value_ratio'] = self.df['totalpremium'] / \
-                self.df['customvalueestimate'].replace(0, np.nan)
-            self.df['premium_to_value_ratio'].fillna(0, inplace=True)
-            new_features.append('premium_to_value_ratio')
-            print("✓ Created feature: premium_to_value_ratio")
-
-        if all(col in self.df.columns for col in ['calculatedpremiumperterm', 'totalpremium']):
-            self.df['premium_variance'] = self.df['totalpremium'] - \
-                self.df['calculatedpremiumperterm']
-            new_features.append('premium_variance')
-            print("✓ Created feature: premium_variance")
-
-        # 4. Temporal features
-        if 'transactionmonth' in self.df.columns:
-            self.df['transaction_yearmonth'] = self.df['transactionmonth'].dt.to_period(
-                'M').astype(str)
-            self.df['transaction_month'] = self.df['transactionmonth'].dt.month
-            self.df['transaction_quarter'] = self.df['transactionmonth'].dt.quarter
-            self.df['transaction_year'] = self.df['transactionmonth'].dt.year
-            self.df['transaction_dayofweek'] = self.df['transactionmonth'].dt.dayofweek
-            self.df['is_weekend'] = self.df['transaction_dayofweek'].isin([
-                                                                          5, 6]).astype(int)
-
-            new_features.extend(['transaction_yearmonth', 'transaction_month', 'transaction_quarter',
-                                 'transaction_year', 'transaction_dayofweek', 'is_weekend'])
-            print("✓ Created time-based features")
-
-        # 5. Risk segmentation features
-        if 'lossratio' in self.df.columns:
-            # Create risk categories based on loss ratio
-            risk_bins = [-np.inf, 0.1, 0.3, 0.6, 1.0, np.inf]
-            risk_labels = ['Very Low', 'Low', 'Medium', 'High', 'Very High']
-            self.df['risk_category'] = pd.cut(
-                self.df['lossratio'], bins=risk_bins, labels=risk_labels)
-            new_features.append('risk_category')
-            print("✓ Created feature: risk_category")
-
-        # 6. Customer-related features
-        if 'numberofvehiclesinfleet' in self.df.columns:
-            self.df['is_fleet'] = (
-                self.df['numberofvehiclesinfleet'] > 1).astype(int)
-            new_features.append('is_fleet')
-            print("✓ Created feature: is_fleet")
-
-        # 7. Interaction features
-        if all(col in self.df.columns for col in ['gender', 'maritalstatus']):
-            self.df['gender_marital'] = self.df['gender'] + \
-                '_' + self.df['maritalstatus']
-            new_features.append('gender_marital')
-            print("✓ Created feature: gender_marital (interaction)")
-
-        if all(col in self.df.columns for col in ['province', 'vehicletype']):
-            self.df['province_vehicletype'] = self.df['province'] + \
-                '_' + self.df['vehicletype']
-            new_features.append('province_vehicletype')
-            print("✓ Created feature: province_vehicletype (interaction)")
-
-        # Update metadata
-        new_cols = set(self.df.columns) - original_cols
-        self.metadata['engineered_features'] = list(new_cols)
-        self.metadata['feature_count'] = len(new_features)
-
-        print(f"\n✓ Feature engineering complete:")
-        print(f"  Original columns: {len(original_cols)}")
-        print(f"  New columns: {len(new_cols)}")
-        print(f"  Total columns: {len(self.df.columns)}")
-        print(f"\nNew features created: {new_features}")
-
-    def _calculate_zscore(self, data):
-        """
-        Calculate z-score without using scipy.stats
-
-        Args:
-            data (pd.Series): Data series
-
-        Returns:
-            np.array: Z-scores
-        """
-        mean = np.mean(data)
-        std = np.std(data)
-        if std == 0:
-            return np.zeros(len(data))
-        return (data - mean) / std
-
-    def detect_outliers(self, method='iqr', threshold=1.5, columns=None):
-        """
-        Detect outliers in numerical columns
-
-        Args:
-            method (str): 'iqr' or 'zscore'
-            threshold (float): Threshold for outlier detection
-            columns (list): Specific columns to analyze (None for all numerical)
-
-        Returns:
-            dict: Dictionary with outlier information
-        """
-        if self.df is None:
-            print("No data loaded. Please load data first.")
-            return None
-
-        print("=" * 80)
-        print("OUTLIER DETECTION")
-        print("=" * 80)
-
-        if columns is None:
-            columns = self.numerical_cols
-
-        # Filter to columns that exist and have data
-        columns = [
-            col for col in columns if col in self.df.columns and self.df[col].notna().sum() > 0]
-
-        print(
-            f"Analyzing {len(columns)} numerical columns for outliers using {method} method...")
-
-        outlier_report = {}
-        total_outliers = 0
-
-        for col in columns:
-            try:
-                data = self.df[col].dropna()
-                if len(data) == 0:
-                    continue
-
-                # Initialize variables
-                outliers = pd.Series(dtype='bool')
-                lower_bound = None
-                upper_bound = None
-
-                if method == 'iqr':
-                    Q1 = data.quantile(0.25)
-                    Q3 = data.quantile(0.75)
-                    IQR = Q3 - Q1
-
-                    if IQR == 0:
-                        # Use standard deviation if IQR is zero
-                        std = data.std()
-                        if std == 0:
-                            continue
-                        lower_bound = data.mean() - threshold * std
-                        upper_bound = data.mean() + threshold * std
-                        outliers = self.df[col].apply(
-                            lambda x: x < lower_bound or x > upper_bound)
-                    else:
-                        lower_bound = Q1 - threshold * IQR
-                        upper_bound = Q3 + threshold * IQR
-                        outliers = (self.df[col] < lower_bound) | (
-                            self.df[col] > upper_bound)
-
-                elif method == 'zscore':
-                    # Use custom z-score calculation
-                    z_scores = np.abs(self._calculate_zscore(data))
-                    # Create a boolean mask for outliers in the original dataframe
-                    outlier_mask = pd.Series(False, index=self.df.index)
-                    outlier_indices = data.index[z_scores > threshold]
-                    outlier_mask.loc[outlier_indices] = True
-                    outliers = outlier_mask
-                else:
-                    print(
-                        f"  ✗ {col}: Unknown method '{method}'. Use 'iqr' or 'zscore'.")
-                    continue
-
-                outlier_count = outliers.sum()
-                if outlier_count > 0:
-                    outlier_percentage = (outlier_count / len(self.df)) * 100
-                    total_outliers += outlier_count
-
-                    outlier_report[col] = {
-                        'outlier_count': int(outlier_count),
-                        'outlier_percentage': float(outlier_percentage),
-                        'min_value': float(data.min()),
-                        'max_value': float(data.max()),
-                        'mean': float(data.mean()),
-                        'std': float(data.std()),
-                        'lower_bound': float(lower_bound) if lower_bound is not None else None,
-                        'upper_bound': float(upper_bound) if upper_bound is not None else None,
-                        # Limit to first 100
-                        'outlier_indices': self.df[outliers].index.tolist()[:100]
-                    }
-
-                    if outlier_percentage > 5:  # Only show columns with >5% outliers
-                        print(f"  ⚠ {col:<35}: {outlier_count:>6} outliers ({outlier_percentage:>5.1f}%) "
-                              f"[min: {data.min():.2f}, max: {data.max():.2f}]")
-
-            except Exception as e:
-                print(f"  ✗ Error analyzing {col}: {str(e)}")
-                continue
-
-        # Summary
-        print(f"\nOutlier Detection Summary:")
-        print(f"  Total columns analyzed: {len(columns)}")
-        print(f"  Columns with outliers: {len(outlier_report)}")
-        print(f"  Total outlier instances: {total_outliers:,}")
-
-        if outlier_report:
-            # Sort by outlier percentage
-            sorted_report = sorted(outlier_report.items(
-            ), key=lambda x: x[1]['outlier_percentage'], reverse=True)
-
-            print(f"\nTop 10 columns with highest outlier percentage:")
-            for i, (col, stats) in enumerate(sorted_report[:10]):
-                print(
-                    f"  {i+1:2}. {col:<35}: {stats['outlier_count']:>6} ({stats['outlier_percentage']:>5.1f}%)")
-
-        self.outlier_report = outlier_report
-
-        # Save outlier report
-        if outlier_report:
-            self._save_outlier_report(outlier_report)
-
-        return outlier_report
-
-    def _save_outlier_report(self, outlier_report):
-        """Save outlier report to CSV"""
-        import os
-        os.makedirs('../data/outputs', exist_ok=True)
-
-        # Convert to DataFrame
-        report_df = pd.DataFrame.from_dict(outlier_report, orient='index')
-        report_df = report_df.sort_values(
-            'outlier_percentage', ascending=False)
-
-        # Save full report
-        report_df.to_csv('../data/outputs/outlier_report_full.csv')
-
-        # Save summary
-        summary_cols = ['outlier_count', 'outlier_percentage',
-                        'min_value', 'max_value', 'mean', 'std']
-        existing_cols = [
-            col for col in summary_cols if col in report_df.columns]
-        if existing_cols:
-            summary_df = report_df[existing_cols]
-            summary_df.to_csv('../data/outputs/outlier_report_summary.csv')
-
-        print("✓ Saved outlier reports to data/outputs/outlier_report_*.csv")
-
-    def remove_outliers(self, columns=None, method='iqr', threshold=1.5, inplace=True):
-        """
-        Remove outliers from specified columns
-
-        Args:
-            columns (list): Columns to remove outliers from
-            method (str): 'iqr' or 'zscore'
-            threshold (float): Threshold for outlier detection
-            inplace (bool): Whether to modify the dataframe in place
-
-        Returns:
-            pd.DataFrame: Dataframe with outliers removed
-        """
-        if self.df is None:
-            print("No data loaded. Please load data first.")
-            return None
-
-        if columns is None:
-            columns = list(self.outlier_report.keys()
-                           ) if self.outlier_report else self.numerical_cols
-
-        print(f"Removing outliers from {len(columns)} columns...")
-
-        if inplace:
-            df_clean = self.df
-        else:
-            df_clean = self.df.copy()
-
-        initial_rows = len(df_clean)
-        outlier_indices = set()
-
-        for col in columns:
-            if col not in df_clean.columns:
-                continue
-
-            data = df_clean[col].dropna()
-            if len(data) == 0:
-                continue
-
-            col_outliers = set()  # Initialize as empty set
-
-            if method == 'iqr':
-                Q1 = data.quantile(0.25)
-                Q3 = data.quantile(0.75)
-                IQR = Q3 - Q1
-
-                if IQR == 0:
-                    continue
-
-                lower_bound = Q1 - threshold * IQR
-                upper_bound = Q3 + threshold * IQR
-
-                col_outliers = set(df_clean[(df_clean[col] < lower_bound) | (
-                    df_clean[col] > upper_bound)].index)
-
-            elif method == 'zscore':
-                # Use custom z-score calculation
-                z_scores = np.abs(self._calculate_zscore(data))
-                col_outliers = set(
-                    data.index[np.where(z_scores > threshold)[0]])
-
-            outlier_indices.update(col_outliers)
-
-        # Remove rows with outliers in any of the specified columns
-        rows_removed = len(outlier_indices)
-        df_clean = df_clean.drop(index=list(outlier_indices))
-
-        print(f"Outlier removal complete:")
-        print(f"  Initial rows: {initial_rows:,}")
-        print(f"  Rows removed: {rows_removed:,}")
-        print(f"  Final rows: {len(df_clean):,}")
-        print(f"  Percentage removed: {rows_removed/initial_rows*100:.2f}%" if initial_rows >
-              0 else "  Percentage removed: N/A")
-
-        if inplace:
-            self.df = df_clean
-            print("✓ Outliers removed in-place")
-        else:
-            print("✓ Outliers removed from copy")
-
-        return df_clean
-
-    def get_preprocessed_data(self):
-        """
-        Get the preprocessed dataframe
-
-        Returns:
-            pd.DataFrame: Preprocessed data
-        """
-        return self.df
-
-    def get_metadata(self):
-        """
-        Get preprocessing metadata
-
-        Returns:
-            dict: Metadata dictionary
-        """
-        return self.metadata
-
-    def save_preprocessed_data(self, output_path):
-        """
-        Save preprocessed data to file
-
-        Args:
-            output_path (str): Path to save preprocessed data
-        """
-        if self.df is not None:
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-            # Save to CSV
-            self.df.to_csv(output_path, index=False)
-            print(f"✓ Preprocessed data saved to: {output_path}")
-
-            # Also save metadata
-            metadata_path = output_path.replace('.csv', '_metadata.json')
-            import json
-
-            # Convert metadata to JSON serializable format
-            metadata_serializable = {}
-            for key, value in self.metadata.items():
-                if isinstance(value, (pd.Series, pd.DataFrame)):
-                    metadata_serializable[key] = value.to_dict()
-                elif isinstance(value, np.ndarray):
-                    metadata_serializable[key] = value.tolist()
-                elif isinstance(value, np.generic):
-                    metadata_serializable[key] = value.item()
-                else:
-                    metadata_serializable[key] = value
-
-            with open(metadata_path, 'w') as f:
-                json.dump(metadata_serializable, f, indent=4, default=str)
-
-            print(f"✓ Metadata saved to: {metadata_path}")
-        else:
-            print("No data to save. Please preprocess data first.")
-
-    def get_summary(self):
-        """
-        Get a summary of the preprocessing steps
-
-        Returns:
-            dict: Summary dictionary
-        """
-        summary = {
-            'file_path': self.metadata.get('file_path', 'Unknown'),
-            'original_shape': self.metadata.get('original_shape', (0, 0)),
-            'current_shape': self.df.shape if self.df is not None else (0, 0),
-            'categorical_columns': len(self.categorical_cols),
-            'numerical_columns': len(self.numerical_cols),
-            'quality_score': self.quality_report.get('quality_score', {}).get('overall', 0) if self.quality_report else 0,
-            'missing_values_initial': self.metadata.get('missing_values_handled', {}).get('initial', 0),
-            'missing_values_final': self.df.isnull().sum().sum() if self.df is not None else 0,
-            'engineered_features': len(self.metadata.get('engineered_features', [])),
-            'outlier_columns': len(self.outlier_report)
-        }
-
-        return summary
+            f"📈 Memory usage: {df_final.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+
+        # Display sample of new features
+        if create_features:
+            new_features = [col for col in df_final.columns if col.startswith(
+                ('Log_', 'LossRatio', 'PremiumRate', 'HasClaim'))]
+            if new_features:
+                print(f"✨ New features created: {', '.join(new_features)}")
+
+        return df_final
+
+
+# -----------------------
+# CLI runner
+# -----------------------
+if __name__ == "__main__":
+    RAW_FILE_PATH = r"D:\Python\Week-3\Raw_Data\MachineLearningRating_v3.txt"
+    OUTPUT_FILE_PATH = r"D:\Python\Week-3\Insurance-Analytics-Week-3-\data\processed\processed_MachineLearningRating_v3.csv"
+
+    pre = DataPreprocessor(
+        raw_path=RAW_FILE_PATH,
+        out_path=OUTPUT_FILE_PATH,
+        chunksize=100_000,
+        delimiter="|",
+        log_transform=True
+    )
+
+    # Process with enhanced features
+    df_processed = pre.process(
+        save_format="csv",
+        create_features=True,
+        run_quality_checks=True
+    )
+
+    # Optional: Display sample of processed data
+    print("\n" + "="*60)
+    print("SAMPLE OF PROCESSED DATA")
+    print("="*60)
+    print(df_processed.head())
