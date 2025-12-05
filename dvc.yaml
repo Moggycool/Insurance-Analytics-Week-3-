@@ -5,4 +5,4 @@ stages:
       - src/data_preprocessing.py
       - data/raw/MachineLearningRating_v3.txt
     outs:
-      - data/processed/processed_MachineLearningRating_v3.txt
+      - data/processed/processed_MachineLearningRating_v3.csv
