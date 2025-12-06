@@ -1,0 +1,44 @@
+{
+  "TotalPremium": {
+    "outliers": 208994,
+    "outlier_pct": 20.9,
+    "Q1": 0.0,
+    "Q3": 21.93,
+    "IQR": 21.93
+  },
+  "TotalClaims": {
+    "outliers": 0,
+    "outlier_pct": 0.0,
+    "Q1": 0.0,
+    "Q3": 0.0,
+    "IQR": 0.0
+  },
+  "SumInsured": {
+    "outliers": 104294,
+    "outlier_pct": 10.43,
+    "Q1": 5000.0,
+    "Q3": 250000.0,
+    "IQR": 245000.0
+  },
+  "CalculatedPremiumPerTerm": {
+    "outliers": 175496,
+    "outlier_pct": 17.55,
+    "Q1": 3.22,
+    "Q3": 90.0,
+    "IQR": 86.78
+  },
+  "LossRatio": {
+    "outliers": 0,
+    "outlier_pct": 0.0,
+    "Q1": 0.0,
+    "Q3": 0.0,
+    "IQR": 0.0
+  },
+  "VehicleAge": {
+    "outliers": 7007,
+    "outlier_pct": 0.7,
+    "Q1": 2.0,
+    "Q3": 7.0,
+    "IQR": 5.0
+  }
+}
