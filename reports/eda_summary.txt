@@ -1,0 +1,43 @@
+============================================================
+EDA SUMMARY REPORT
+============================================================
+
+Analysis Date: 2025-12-06 21:39:55
+Dataset: 1000086 rows × 61 columns
+Memory Usage: 1977.56 MB
+
+
+KEY FINDINGS:
+- Average Loss Ratio: 0.00%
+- Claim Frequency: 0.00%
+- Total Premium: $60,894,646.97
+- Total Sum Insured: $603,926,955,896.76
+
+============================================================
+BUSINESS INSIGHTS & ANSWERS TO QUESTIONS
+============================================================
+
+QUESTION 1: LOSS RATIO ANALYSIS
+----------------------------------------
+• Overall Loss Ratio: 0.00%
+• Highest Loss Ratio Province: Eastern Cape (0.00%)
+• Lowest Loss Ratio Province: Eastern Cape (0.00%)
+
+QUESTION 2: FINANCIAL DISTRIBUTIONS & OUTLIERS
+----------------------------------------
+• CustomValueEstimate outliers: 1,785 (0.8%)
+
+QUESTION 3: TEMPORAL TRENDS
+----------------------------------------
+• Data covers: 2013-10-01 00:00:00 to 2015-08-01 00:00:00
+• Claim trend: Decreasing
+
+QUESTION 4: VEHICLE ANALYSIS
+----------------------------------------
+• Highest risk make: AUDI (Loss Ratio: 0.00%)
+• Highest risk LegalType: Close Corporation (Loss Ratio: 0.00%)
+• Highest risk AccountType: Current account (Loss Ratio: 0.00%)
+• Highest risk VehicleType: Bus (Loss Ratio: 0.00%)
+• Highest risk bodytype: B/S (Loss Ratio: 0.00%)
+• Highest risk CoverCategory: Accidental Death (Loss Ratio: 0.00%)
+• Highest risk CoverType: Accidental Death (Loss Ratio: 0.00%)
