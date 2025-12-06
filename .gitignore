@@ -11,3 +11,5 @@ Myenv
 data/raw
 #DVC Cache
 .dvc/cache/
+data/processed/processed_MachineLearningRating_v3.csv
+data/raw/MachineLearningRating_v3.txt
