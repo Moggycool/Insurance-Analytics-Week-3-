@@ -7,9 +7,14 @@ Myenv
 # IDE
 # .vscode/
 
-# Data
-data/raw
-#DVC Cache
+
+
+# Ignore raw/processed files, but allow DVC tracking files
+data/raw/*
+!data/raw/*.dvc
+data/processed/*
+!data/processed/*.dvc
+
 .dvc/cache/
-data/processed/processed_MachineLearningRating_v3.csv
-data/raw/MachineLearningRating_v3.txt
+.dvc/tmp/
+
