@@ -34,7 +34,7 @@ jobs:
           if [ -d "tests" ]; then
             python -m pytest tests/ -v
           else
-            echo "No tests directory found, skipping pytest"
+            echo "No tests directory found, skipping pytest."
           fi
 
       - name: Check if src exists and run black
@@ -43,10 +43,10 @@ jobs:
             pip install black
             black src/
           else
-            echo "No src directory found, skipping black check"
+            echo "No src directory found, skipping black check."
           fi
 
-      - name: Check formatting on tests if exists
+      - name: Check formatting on tests if exist
         run: |
           if [ -d "tests" ]; then
             black --check tests/ || echo "Tests formatting check completed"
