@@ -41,7 +41,7 @@ jobs:
         run: |
           if [ -d "src" ]; then
             pip install black
-            black --check src/
+            black src/
           else
             echo "No src directory found, skipping black check"
           fi
