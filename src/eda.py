@@ -8,16 +8,21 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from src.utils import summarize_dataframe, memory_usage
-from src.visualization import plot_histogram, plot_boxplot, plot_correlation_heatmap, plot_loss_ratio_vs_premium
+# Import from utils module
+from src.utils import DataUtils
 
 sns.set_style("whitegrid")
 plt.rcParams.update({"figure.figsize": (10, 6), "font.size": 12})
 
 
 class InsuranceEDA:
+    """
+    A class for InsuranceEDA
+    """
+
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
+        self.utils = DataUtils()  # Create DataUtils instance
         self.numeric_cols = self.df.select_dtypes(
             include=np.number).columns.tolist()
         self.cat_cols = self.df.select_dtypes(
@@ -29,15 +34,21 @@ class InsuranceEDA:
     # 1) Data Summarization
     # -----------------------
     def data_structure_summary(self):
+        """
+        A function for data_structure_summary
+
+
+        """
         print("\n" + "="*60)
         print("DATA STRUCTURE & DTYPE CHECK")
         print("="*60)
         print(self.df.dtypes)
         print("\n" + "="*60)
-        print(f"Memory usage: {memory_usage(self.df):.2f} MB")
+        print(f"Memory usage: {self.utils.memory_usage(self.df):.2f} MB")
         print(f"Dataset shape: {self.df.shape}")
 
     def descriptive_statistics(self):
+        """ A function for descriptive_statistics """
         print("\n" + "="*60)
         print("DESCRIPTIVE STATISTICS (Numerical Features)")
         print("="*60)
@@ -62,7 +73,9 @@ class InsuranceEDA:
     def plot_univariate_distributions(self):
         print("\nPlotting numerical distributions...")
         for col in self.numeric_cols:
-            plot_histogram(self.df, col)
+            from src.visualization import DataVisualizer
+            viz = DataVisualizer()
+            viz.plot_histogram(self.df, col)
         print("\nPlotting categorical distributions...")
         for col in self.cat_cols:
             plt.figure(figsize=(12, 6))
@@ -78,7 +91,9 @@ class InsuranceEDA:
     # -----------------------
     def correlation_analysis(self):
         print("\nPlotting correlation heatmap for numeric variables...")
-        plot_correlation_heatmap(self.df, self.numeric_cols)
+        from src.visualization import DataVisualizer
+        viz = DataVisualizer()
+        viz.plot_correlation_heatmap(self.df, self.numeric_cols)
 
     def monthly_change_scatter(self, col1="TotalPremium", col2="TotalClaims", group_by="PostalCode"):
         if col1 not in self.df.columns or col2 not in self.df.columns:
@@ -125,6 +140,9 @@ class InsuranceEDA:
     # 6) Outlier Detection
     # -----------------------
     def plot_outliers(self):
+        from src.visualization import DataVisualizer
+        viz = DataVisualizer()
+
         for col in self.numeric_cols:
             series = self.df[col].dropna()
 
@@ -142,16 +160,22 @@ class InsuranceEDA:
                 continue
 
             # Safe call to the boxplot
-            plot_boxplot(self.df, col)
+            viz.plot_boxplot(self.df, col)
 
     # -----------------------
     # 7) Creative / Insightful Visualizations
     # -----------------------
 
     def creative_visualizations(self):
+        from src.visualization import DataVisualizer
+        viz = DataVisualizer()
+
         # Example 1: Loss Ratio vs Premium (scatter with log scale)
         if "LossRatio" in self.df.columns and "TotalPremium" in self.df.columns:
-            plot_loss_ratio_vs_premium(self.df)
+            try:
+                viz.plot_loss_ratio_vs_premium(self.df)
+            except Exception as e:
+                print(f"Could not plot Loss Ratio vs Premium: {e}")
 
         # Example 2: Premium per Cover Type (bar chart)
         if "CoverType" in self.df.columns and "TotalPremium" in self.df.columns:
