@@ -115,3 +115,48 @@ Insurance-Analytics-Week-3-
 
 
 
+
+```
+Insurance-Analytics-Week-3-
+├─ .dvc
+│  └─ config
+├─ .dvcignore
+├─ data
+│  ├─ hypothesis_results
+│  │  ├─ cleaned_dataset.csv
+│  │  ├─ hypothesis_report_20251208_184908.md
+│  │  ├─ hypothesis_report_20251208_184949.md
+│  │  ├─ hypothesis_results_20251208_184908.json
+│  │  ├─ hypothesis_results_20251208_184949.json
+│  │  ├─ hypothesis_results_20251208_191343.json
+│  │  ├─ hypothesis_results_20251208_192221.json
+│  │  ├─ hyp_results_summary.xlsx
+│  │  ├─ hyp_summary.csv
+│  │  └─ visualizations
+│  │     ├─ categorical_distributions.png
+│  │     ├─ hypothesis_results_summary.png
+│  │     └─ numerical_distributions.png
+│  └─ output
+├─ dvc.lock
+├─ dvc.yaml
+├─ notebooks
+│  ├─ eda_analysis.ipynb
+│  └─ hypothesis_eda.ipynb
+├─ README.md
+├─ reports
+│  ├─ correlation_matrix.csv
+│  ├─ data_sample.csv
+│  ├─ descriptive_statistics.csv
+│  ├─ eda_summary.txt
+│  └─ outlier_report.json
+├─ requirements.txt
+├─ src
+│  ├─ data_preprocessing.py
+│  ├─ eda.py
+│  ├─ hypothesis_testing.py
+│  ├─ utils.py
+│  ├─ visualization.py
+│  └─ __init__.py
+└─ tests
+
+```
