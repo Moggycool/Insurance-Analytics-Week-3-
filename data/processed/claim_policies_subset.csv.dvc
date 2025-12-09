@@ -1,5 +1,5 @@
 outs:
-- md5: 28bb9553be085780e794d17aa3dd381f
-  size: 1536142
+- md5: 9cc9f2e1bcfdd183916a386804c9f150
+  size: 807366
   hash: md5
   path: claim_policies_subset.csv

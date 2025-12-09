@@ -301,9 +301,9 @@ class ModelingPipeline:
                         explainer = shap.TreeExplainer(self.modeler.best_model)
                         shap_values = explainer.shap_values(X_test_subset)
                     else:
-                        explainer = shap.KernelExplainer(
-                            self.modeler.best_model.predict, X_test_subset)
-                        shap_values = explainer.shap_values(X_test_subset)
+                        logger.warning(
+                            "Skipping SHAP for non-tree model to avoid OOM.")
+                        return
 
                     # Create SHAP directory
                     shap_dir = self.reports_dir / 'SHAP_Analysis'

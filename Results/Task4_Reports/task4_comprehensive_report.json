@@ -1,0 +1,100 @@
+{
+  "project": "Task 4 - Claim Severity Prediction",
+  "timestamp": "2025-12-09T22:00:34.912144",
+  "runtime_seconds": 13.077184,
+  "best_model": {
+    "name": "LinearRegression",
+    "performance": {
+      "rmse": Infinity,
+      "mae": 6.558360591677787e+300,
+      "r2": NaN,
+      "mape": 1.750551192129784e+194,
+      "mpe": -1.750551192129784e+194,
+      "smape": 200.0
+    }
+  },
+  "all_models": {
+    "LinearRegression": {
+      "rmse": Infinity,
+      "mae": 6.558360591677787e+300,
+      "r2": NaN,
+      "mape": 1.750551192129784e+194,
+      "mpe": -1.750551192129784e+194,
+      "smape": 200.0
+    },
+    "Ridge": {
+      "rmse": Infinity,
+      "mae": 1.8952668294876266e+285,
+      "r2": NaN,
+      "mape": 2.861211881222522e+93,
+      "mpe": -2.861211881222522e+93,
+      "smape": 195.67283408039185
+    },
+    "Lasso": {
+      "rmse": Infinity,
+      "mae": 9.841360839747217e+284,
+      "r2": NaN,
+      "mape": 8.911405664692165e+137,
+      "mpe": -8.911405664692165e+137,
+      "smape": 200.0
+    },
+    "ElasticNet": {
+      "rmse": Infinity,
+      "mae": 7.49817968742645e+284,
+      "r2": NaN,
+      "mape": 6.792367341566232e+71,
+      "mpe": -6.792367341566232e+71,
+      "smape": 199.9999999999996
+    },
+    "RandomForest": {
+      "rmse": Infinity,
+      "mae": 1.1893167394146597e+291,
+      "r2": NaN,
+      "mape": 1.6939326871922997e+169,
+      "mpe": -1.6939326871922997e+169,
+      "smape": 200.0
+    },
+    "XGBoost": {
+      "rmse": NaN,
+      "mae": NaN,
+      "r2": NaN,
+      "mape": NaN,
+      "mpe": NaN,
+      "smape": NaN
+    },
+    "GradientBoosting": {
+      "rmse": NaN,
+      "mae": NaN,
+      "r2": NaN,
+      "mape": NaN,
+      "mpe": NaN,
+      "smape": NaN
+    },
+    "LightGBM": {
+      "rmse": Infinity,
+      "mae": 2.349742628384302e+266,
+      "r2": NaN,
+      "mape": 100.0,
+      "mpe": 100.0,
+      "smape": 200.0
+    },
+    "DecisionTree": {
+      "rmse": Infinity,
+      "mae": 1.1701523853381227e+285,
+      "r2": NaN,
+      "mape": 4.645778942165446e+112,
+      "mpe": -4.645778942165446e+112,
+      "smape": 199.99994887309984
+    }
+  },
+  "dataset_info": {
+    "training_samples": 2230,
+    "test_samples": 558,
+    "features_count": 29
+  },
+  "feature_engineering": {
+    "numerical_features": 22,
+    "categorical_features": 7,
+    "total_features_after_engineering": 71
+  }
+}
