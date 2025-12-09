@@ -17,6 +17,7 @@ data/processed/*
 
 .dvc/cache/
 .dvc/tmp/
+.dvc/tmp/*
 
 data/hypothesis_results/cleaned_dataset.csv
 *.csv
