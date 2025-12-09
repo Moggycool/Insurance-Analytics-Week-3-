@@ -1,0 +1,53 @@
+{
+  "timestamp": "2025-12-09 23:08:06",
+  "issues_found": [
+    "Problematic metrics in 9 models"
+  ],
+  "data_checks": {
+    "dataset_shape": [
+      2788,
+      23
+    ],
+    "target_statistics": {
+      "count": 2788.0,
+      "mean": 23273.387063228372,
+      "std": 38719.512596576125,
+      "min": 139.043859649123,
+      "25%": 1680.72807017544,
+      "50%": 6140.35087719298,
+      "75%": 30480.99122807018,
+      "max": 393092.105263158
+    }
+  },
+  "model_checks": {
+    "models_evaluated": [
+      "LinearRegression",
+      "Ridge",
+      "Lasso",
+      "ElasticNet",
+      "RandomForest",
+      "XGBoost",
+      "GradientBoosting",
+      "LightGBM",
+      "DecisionTree"
+    ],
+    "problematic_models": [
+      "LinearRegression",
+      "Ridge",
+      "Lasso",
+      "ElasticNet",
+      "RandomForest",
+      "XGBoost",
+      "GradientBoosting",
+      "LightGBM",
+      "DecisionTree"
+    ]
+  },
+  "recommendations": [
+    "1. Check data preparation pipeline for errors",
+    "2. Verify target variable transformation (Log_TotalClaims)",
+    "3. Remove or cap extreme outliers",
+    "4. Retrain models with proper regularization",
+    "5. Start with simple LinearRegression as baseline"
+  ]
+}
