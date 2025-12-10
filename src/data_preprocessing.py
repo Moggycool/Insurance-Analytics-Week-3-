@@ -2,7 +2,7 @@
 
 import os
 import numpy as np
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Union
 import pandas as pd
 
 
@@ -27,13 +27,30 @@ class DataPreprocessor:
         out_path: str,
         chunksize: int = 100_000,
         delimiter: str = "|",
-        log_transform: bool = True
+        log_transform: bool = True,
+        claims_filter: Optional[str] = None
     ):
+        """
+        Initialize DataPreprocessor.
+
+        Args:
+            raw_path: Path to raw data file
+            out_path: Path for processed output
+            chunksize: Number of rows to process per chunk
+            delimiter: File delimiter
+            log_transform: Whether to apply log transformation to monetary columns
+            claims_filter: Filter for claims data:
+                - None: Process all data (default)
+                - "positive": Filter rows where TotalClaims > 0
+                - "zero": Filter rows where TotalClaims == 0
+                - "non-zero": Filter rows where TotalClaims > 0 (same as "positive")
+        """
         self.raw_path = raw_path
         self.out_path = out_path
         self.chunksize = chunksize
         self.delimiter = delimiter
         self.log_transform = log_transform
+        self.claims_filter = claims_filter
         self.quality_issues = []
         self.transformation_log = []
 
@@ -307,8 +324,41 @@ class DataPreprocessor:
             print(f"Total Claims: ${df['TotalClaims'].sum():,.2f}")
             print(f"Claim Frequency: {(df['TotalClaims'] > 0).mean():.2%}")
 
+            # Additional claims statistics for filtered data
+            if self.claims_filter in ["positive", "non-zero"]:
+                print(f"Number of claims (filtered): {len(df):,}")
+                print(
+                    f"Average Claim Amount: ${df['TotalClaims'].mean():,.2f}")
+
         if "LossRatio" in df.columns:
             print(f"Average Loss Ratio: {df['LossRatio'].mean():.2%}")
+
+    # -----------------------
+    # Claims Filter Helper
+    # -----------------------
+    def _apply_claims_filter(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply claims filter based on initialization parameter."""
+        if "TotalClaims" not in df.columns:
+            return df
+
+        if self.claims_filter is None:
+            return df
+        elif self.claims_filter in ["positive", "non-zero"]:
+            filtered = df[df["TotalClaims"] > 0]
+            self.transformation_log.append(
+                f"Filtered to {len(filtered)} rows with TotalClaims > 0"
+            )
+            return filtered
+        elif self.claims_filter == "zero":
+            filtered = df[df["TotalClaims"] == 0]
+            self.transformation_log.append(
+                f"Filtered to {len(filtered)} rows with TotalClaims == 0"
+            )
+            return filtered
+        else:
+            print(
+                f"Warning: Unknown claims_filter option '{self.claims_filter}', using all data")
+            return df
 
     # -----------------------
     # Chunk preprocessing
@@ -370,6 +420,13 @@ class DataPreprocessor:
 
         # 6) Premium & Claims
         df = self._convert_numeric(df, ["TotalPremium", "TotalClaims"])
+
+        # Apply claims filter before further processing
+        df = self._apply_claims_filter(df)
+
+        # If no rows remain after filtering, return empty DataFrame
+        if len(df) == 0:
+            return df
 
         # 7) Insurance-specific validations and outlier handling
         df = self._validate_insurance_logic(df)
@@ -448,21 +505,31 @@ class DataPreprocessor:
         print(f"📊 Chunk size: {self.chunksize:,}")
         print(f"🎯 Target format: {save_format.upper()}")
 
+        if self.claims_filter:
+            print(f"🔍 Claims filter: {self.claims_filter}")
+
         for i, chunk in enumerate(self._iter_read_chunks()):
             print(f"👉 Processing chunk {i+1} (size: {len(chunk):,})")
 
             cleaned = self._preprocess_chunk(chunk)
-            chunks.append(cleaned)
-            processed_rows += len(cleaned)
+
+            # Only append if chunk has rows after filtering
+            if len(cleaned) > 0:
+                chunks.append(cleaned)
+                processed_rows += len(cleaned)
 
             if sample_nrows and processed_rows >= sample_nrows:
                 print(
                     f"⏱ Sample limit reached ({sample_nrows} rows) — stopping early.")
                 break
 
+        # Check if any data remains after filtering
+        if not chunks:
+            print("⚠️ No data remaining after applying claims filter!")
+            return pd.DataFrame()
+
         print("🧹 Combining all cleaned chunks...")
-        df_final = pd.concat(
-            chunks, ignore_index=True) if chunks else pd.DataFrame()
+        df_final = pd.concat(chunks, ignore_index=True)
 
         # Remove duplicates across chunks
         initial_rows = len(df_final)
@@ -528,19 +595,73 @@ class DataPreprocessor:
 
 
 # -----------------------
-# CLI runner
+# CLI runner with options for different analyses
 # -----------------------
 if __name__ == "__main__":
     RAW_FILE_PATH = r"D:\Python\Week-3\Raw_Data\MachineLearningRating_v3.txt"
+
+    # Choose which dataset to create:
+    # Option 1: Full dataset (all policies)
     OUTPUT_FILE_PATH = r"D:\Python\Week-3\Insurance-Analytics-Week-3-\data\processed\processed_MachineLearningRating_v3.csv"
 
-    pre = DataPreprocessor(
-        raw_path=RAW_FILE_PATH,
-        out_path=OUTPUT_FILE_PATH,
-        chunksize=100_000,
-        delimiter="|",
-        log_transform=True
-    )
+    # Option 2: Claims dataset (only policies with claims > 0)
+    CLAIMS_OUTPUT_PATH = r"D:\Python\Week-3\Insurance-Analytics-Week-3-\data\processed\claims_positive_MachineLearningRating_v3.csv"
+
+    # Option 3: Non-claims dataset (only policies with claims = 0)
+    NON_CLAIMS_OUTPUT_PATH = r"D:\Python\Week-3\Insurance-Analytics-Week-3-\data\processed\claims_zero_MachineLearningRating_v3.csv"
+
+    # Create different processors for different analyses
+
+    print("="*80)
+    print("INSURANCE DATA PREPROCESSOR")
+    print("="*80)
+    print("\nChoose which dataset to process:")
+    print("1. Full dataset (all policies)")
+    print("2. Claims dataset (only policies with TotalClaims > 0)")
+    print("3. Non-claims dataset (only policies with TotalClaims = 0)")
+
+    choice = input("\nEnter your choice (1, 2, or 3): ").strip()
+
+    if choice == "1":
+        print("\n📊 Processing FULL DATASET (all policies)...")
+        pre = DataPreprocessor(
+            raw_path=RAW_FILE_PATH,
+            out_path=OUTPUT_FILE_PATH,
+            chunksize=100_000,
+            delimiter="|",
+            log_transform=True,
+            claims_filter=None  # Process all data
+        )
+    elif choice == "2":
+        print("\n💰 Processing CLAIMS DATASET (TotalClaims > 0)...")
+        pre = DataPreprocessor(
+            raw_path=RAW_FILE_PATH,
+            out_path=CLAIMS_OUTPUT_PATH,
+            chunksize=100_000,
+            delimiter="|",
+            log_transform=True,
+            claims_filter="positive"  # Only claims > 0
+        )
+    elif choice == "3":
+        print("\n🛡️ Processing NON-CLAIMS DATASET (TotalClaims = 0)...")
+        pre = DataPreprocessor(
+            raw_path=RAW_FILE_PATH,
+            out_path=NON_CLAIMS_OUTPUT_PATH,
+            chunksize=100_000,
+            delimiter="|",
+            log_transform=True,
+            claims_filter="zero"  # Only claims = 0
+        )
+    else:
+        print("Invalid choice. Using full dataset by default.")
+        pre = DataPreprocessor(
+            raw_path=RAW_FILE_PATH,
+            out_path=OUTPUT_FILE_PATH,
+            chunksize=100_000,
+            delimiter="|",
+            log_transform=True,
+            claims_filter=None
+        )
 
     # Process with enhanced features
     df_processed = pre.process(
@@ -554,3 +675,67 @@ if __name__ == "__main__":
     print("SAMPLE OF PROCESSED DATA")
     print("="*60)
     print(df_processed.head())
+
+    # If processing claims data, show loss ratio by different dimensions
+    if pre.claims_filter in ["positive", "non-zero"] and not df_processed.empty:
+        print("\n" + "="*80)
+        print("LOSS RATIO ANALYSIS (Claims Data Only)")
+        print("="*80)
+
+        # Calculate overall loss ratio for claims data
+        if all(col in df_processed.columns for col in ["TotalClaims", "TotalPremium"]):
+            total_claims = df_processed["TotalClaims"].sum()
+            total_premium = df_processed["TotalPremium"].sum()
+            overall_loss_ratio = total_claims / total_premium if total_premium > 0 else 0
+
+            print(
+                f"\n📈 Overall Loss Ratio for Claims Data: {overall_loss_ratio:.2%}")
+            print(f"   Total Claims: ${total_claims:,.2f}")
+            print(f"   Total Premium: ${total_premium:,.2f}")
+
+        # Check for dimensions to analyze
+        dimensions = []
+        if "Province" in df_processed.columns:
+            dimensions.append("Province")
+        if "VehicleType" in df_processed.columns:
+            dimensions.append("VehicleType")
+        elif "CoverType" in df_processed.columns:  # Use CoverType as proxy for VehicleType
+            dimensions.append("CoverType")
+        if "Gender" in df_processed.columns:
+            dimensions.append("Gender")
+
+        if dimensions:
+            print(
+                f"\n🔍 Analyzing Loss Ratio by dimensions: {', '.join(dimensions)}")
+
+            # Group by each dimension and calculate loss ratio
+            for dimension in dimensions:
+                if dimension in df_processed.columns:
+                    # Group by dimension and calculate aggregated metrics
+                    grouped = df_processed.groupby(dimension).agg({
+                        "TotalClaims": "sum",
+                        "TotalPremium": "sum",
+                        "PolicyID": "count"  # Count of policies
+                    }).rename(columns={"PolicyID": "PolicyCount"})
+
+                    # Calculate loss ratio
+                    grouped["LossRatio"] = grouped["TotalClaims"] / \
+                        grouped["TotalPremium"].replace(0, np.nan)
+
+                    # Sort by loss ratio (highest first)
+                    grouped = grouped.sort_values("LossRatio", ascending=False)
+
+                    print(f"\n📊 Loss Ratio by {dimension}:")
+                    print("-" * 50)
+                    print(
+                        f"{'Category':<20} {'Policies':<10} {'Claims':<12} {'Premium':<12} {'Loss Ratio':<12}")
+                    print("-" * 50)
+
+                    for idx, row in grouped.head(10).iterrows():  # Show top 10
+                        category = str(
+                            idx)[:18] + "..." if len(str(idx)) > 18 else str(idx)
+                        print(
+                            f"{category:<20} {row['PolicyCount']:<10,} ${row['TotalClaims']:<11,.0f} ${row['TotalPremium']:<11,.0f} {row['LossRatio']:<12.2%}")
+
+                    if len(grouped) > 10:
+                        print(f"... and {len(grouped) - 10} more categories")
