@@ -18,12 +18,10 @@ from extract_claim import ClaimDataExtractor
 # Add the parent directory to path
 sys.path.append(str(Path(__file__).parent))
 
-# Import modules
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('modeling_pipeline.log'),
         logging.StreamHandler()
@@ -81,7 +79,7 @@ class ModelingPipeline:
 
             # STEP 3: Feature engineering
             X_train_transformed, X_test_transformed = self._step3_feature_engineering(
-                X_train, X_test, y_train, y_test
+                X_train, X_test, y_train
             )
 
             # STEP 4: Modeling
@@ -156,42 +154,69 @@ class ModelingPipeline:
 
         return X_train, X_test, y_train, y_test
 
-    def _step3_feature_engineering(self, X_train, X_test, y_train, y_test):
+    def _step3_feature_engineering(self, X_train, X_test, y_train):
         """Step 3: Feature engineering and preprocessing."""
         logger.info("\n⚙️ STEP 3: FEATURE ENGINEERING")
         logger.info("-"*40)
 
         self.feature_engineer = FeatureEngineer()
 
-        # Create additional features
+        # Create additional features WITHOUT target leakage
         logger.info("Creating additional features...")
         X_train_enhanced = self.feature_engineer.create_additional_features(
-            X_train, y_train)
+            X_train, is_training=True
+        )
         X_test_enhanced = self.feature_engineer.create_additional_features(
-            X_test, y_test)
+            X_test, is_training=False
+        )
 
-        # Select features using correlation
+        # Select features using correlation (for feature selection only, not creation)
         logger.info("Selecting features using correlation...")
         X_train_selected = self.feature_engineer.select_features_using_correlation(
             X_train_enhanced, y_train, threshold=0.05
         )
-        X_test_selected = self.feature_engineer.select_features_using_correlation(
-            X_test_enhanced, y_test, threshold=0.05
-        )
+
+        # For test data, we need to align columns to match training selection
+        # Get the columns selected from training
+        selected_columns = X_train_selected.columns.tolist()
+
+        # Ensure test data has the same columns (add missing, drop extra)
+        X_test_selected = X_test_enhanced.copy()
+
+        # Add missing columns with default values
+        missing_cols = set(selected_columns) - set(X_test_selected.columns)
+        for col in missing_cols:
+            if col in self.feature_engineer.numerical_features:
+                X_test_selected[col] = 0
+            elif col in self.feature_engineer.categorical_features:
+                X_test_selected[col] = 'missing'
+            else:
+                X_test_selected[col] = 0
+
+        # Drop extra columns
+        extra_cols = set(X_test_selected.columns) - set(selected_columns)
+        if extra_cols:
+            X_test_selected = X_test_selected.drop(columns=list(extra_cols))
+
+        # Ensure column order matches
+        X_test_selected = X_test_selected[selected_columns]
 
         # Select features using variance
         logger.info("Selecting features using variance...")
         X_train_selected = self.feature_engineer.select_features_using_variance(
             X_train_selected, threshold=0.01
         )
-        X_test_selected = self.feature_engineer.select_features_using_variance(
-            X_test_selected, threshold=0.01
-        )
+
+        # Update selected columns after variance selection
+        selected_columns = X_train_selected.columns.tolist()
+
+        # Align test data again
+        X_test_selected = X_test_selected[selected_columns]
 
         # Fit and transform features
         logger.info("Transforming features...")
         X_train_transformed, X_test_transformed = self.feature_engineer.fit_transform_features(
-            X_train_selected, X_test_selected
+            X_train_selected, X_test_selected, y_train
         )
 
         # Save preprocessor
@@ -212,10 +237,16 @@ class ModelingPipeline:
 
         self.modeler = ClaimSeverityModeler(model_dir=str(self.models_dir))
 
-        # Train multiple models
+        # IMPORTANT: Apply log transformation to target for regression
+        # This is critical for claim severity prediction
+        logger.info("Applying log transformation to target variable...")
+        y_train_log = np.log1p(y_train)
+        y_test_log = np.log1p(y_test)
+
+        # Train multiple models with LOG-transformed target
         models = self.modeler.train_models(
-            X_train, y_train,
-            X_test, y_test,
+            X_train, y_train_log,  # Use log-transformed target
+            X_test, y_test_log,
             use_cv=True,
             cv_folds=5
         )
@@ -236,7 +267,7 @@ class ModelingPipeline:
             logger.info(
                 f"\n🎯 Hyperparameter tuning for {self.modeler.best_model_name}")
             self.modeler.hyperparameter_tuning(
-                X_train, y_train,
+                X_train, y_train_log,  # Use log-transformed target
                 model_name=self.modeler.best_model_name,
                 cv_folds=3
             )
@@ -271,54 +302,70 @@ class ModelingPipeline:
         try:
             import shap
 
-            # Get test data from predictions
-            if self.modeler.best_model_name in self.modeler.predictions:
-                y_test_log = self.modeler.predictions[self.modeler.best_model_name]['y_test_log']
-                X_test_transformed = None  # We need the actual transformed test features
-
-                # Try to load test data
+            # Get the transformed test data
+            if hasattr(self.feature_engineer, 'X_test_transformed'):
+                X_test_transformed = self.feature_engineer.X_test_transformed
+            else:
+                # Try to reconstruct test data
                 test_file = self.processed_dir / 'test_data.csv'
                 if test_file.exists():
                     test_df = pd.read_csv(test_file)
-                    # Separate features and target
-                    X_test_data = test_df.drop(
-                        columns=['Log_TotalClaims'], errors='ignore')
-
                     # Transform using the saved preprocessor
-                    preprocessor_file = self.models_dir / 'preprocessor.pkl'
-                    if preprocessor_file.exists():
-                        with open(preprocessor_file, 'rb') as f:
-                            preprocessor = pickle.load(f)
-                        X_test_transformed = preprocessor.transform(
-                            X_test_data)
+                    X_test_data = test_df.drop(
+                        columns=['TotalClaims',
+                                 'Log_TotalClaims', 'HighClaim'],
+                        errors='ignore'
+                    )
+                    X_test_transformed = self.feature_engineer.transform_new_data(
+                        X_test_data)
+                else:
+                    logger.warning("Test data not available for SHAP analysis")
+                    return
 
-                if X_test_transformed is not None:
-                    # Use a subset for SHAP (faster)
-                    X_test_subset = X_test_transformed[:30]
+            if X_test_transformed is not None:
+                # Use a subset for SHAP (faster)
+                X_test_subset = X_test_transformed[:30]
 
-                    # Choose explainer based on model type
-                    if self.modeler.best_model_name in ['XGBoost', 'RandomForest', 'GradientBoosting']:
+                # Choose explainer based on model type
+                model_type = self.modeler.best_model_name
+
+                if model_type in ['XGBoost', 'RandomForest', 'GradientBoosting', 'DecisionTree']:
+                    try:
                         explainer = shap.TreeExplainer(self.modeler.best_model)
                         shap_values = explainer.shap_values(X_test_subset)
-                    else:
+                    except Exception as e:
                         logger.warning(
-                            "Skipping SHAP for non-tree model to avoid OOM.")
+                            f"TreeExplainer failed: {str(e)}. Using KernelExplainer instead.")
+                        # Fall back to KernelExplainer
+                        explainer = shap.KernelExplainer(
+                            self.modeler.best_model.predict,
+                            X_test_subset[:5]  # Use small background
+                        )
+                        shap_values = explainer.shap_values(X_test_subset)
+                else:
+                    # For linear models, use LinearExplainer
+                    try:
+                        explainer = shap.LinearExplainer(
+                            self.modeler.best_model, X_test_subset)
+                        shap_values = explainer.shap_values(X_test_subset)
+                    except:
+                        logger.warning("Skipping SHAP for this model type")
                         return
 
-                    # Create SHAP directory
-                    shap_dir = self.reports_dir / 'SHAP_Analysis'
-                    shap_dir.mkdir(exist_ok=True)
+                # Create SHAP directory
+                shap_dir = self.reports_dir / 'SHAP_Analysis'
+                shap_dir.mkdir(exist_ok=True)
 
-                    # Get feature names (limit to actual number of features)
-                    feature_names = self.feature_engineer.feature_names
-                    n_features = min(len(feature_names),
-                                     X_test_subset.shape[1])
-                    feature_names_subset = feature_names[:n_features]
+                # Get feature names
+                feature_names = self.feature_engineer.feature_names
+                if len(feature_names) > X_test_subset.shape[1]:
+                    feature_names = feature_names[:X_test_subset.shape[1]]
 
-                    # 1. Summary plot
-                    plt.figure(figsize=(12, 8))
+                # 1. Summary plot
+                plt.figure(figsize=(12, 8))
+                if hasattr(shap_values, 'shape') and len(shap_values.shape) > 1:
                     shap.summary_plot(shap_values, X_test_subset,
-                                      feature_names=feature_names_subset,
+                                      feature_names=feature_names,
                                       show=False)
                     plt.title(
                         f'SHAP Summary Plot - {self.modeler.best_model_name}', fontsize=16)
@@ -331,7 +378,7 @@ class ModelingPipeline:
                     plt.figure(figsize=(10, 6))
                     shap.summary_plot(shap_values, X_test_subset,
                                       plot_type="bar",
-                                      feature_names=feature_names_subset,
+                                      feature_names=feature_names,
                                       show=False)
                     plt.title(
                         f'SHAP Feature Importance - {self.modeler.best_model_name}', fontsize=16)
@@ -350,16 +397,13 @@ class ModelingPipeline:
 
                     # Create feature importance DataFrame
                     shap_importance = pd.DataFrame({
-                        'feature': feature_names_subset,
+                        'feature': feature_names[:len(mean_abs_shap)],
                         'shap_importance': mean_abs_shap
                     }).sort_values('shap_importance', ascending=False)
 
                     # Save to CSV
                     shap_importance.to_csv(
                         shap_dir / 'shap_feature_importance.csv', index=False)
-
-                    # Save SHAP values
-                    np.save(shap_dir / 'shap_values.npy', shap_values_array)
 
                     logger.info(f"✅ SHAP analysis complete")
                     logger.info(f"Top 5 most influential features:")
@@ -492,12 +536,16 @@ class ModelingPipeline:
 
             f.write("## Executive Summary\n\n")
             if report['best_model']['name']:
+                best_metrics = report['best_model']['performance']
                 f.write(
                     f"The claim severity prediction model was successfully built and evaluated. ")
                 f.write(
                     f"The best-performing model was **{report['best_model']['name']}** ")
-                f.write(
-                    f"with an R² score of {report['best_model']['performance'].get('r2', 0):.4f}.\n\n")
+                if 'r2' in best_metrics:
+                    f.write(
+                        f"with an R² score of {best_metrics.get('r2', 0):.4f}.\n\n")
+                else:
+                    f.write("with detailed performance metrics below.\n\n")
             else:
                 f.write("Model training completed. See detailed results below.\n\n")
 
@@ -507,8 +555,22 @@ class ModelingPipeline:
                 f.write("|-------|----------|----------|---------|------|\n")
 
                 for model_name, metrics in report['all_models'].items():
-                    f.write(f"| {model_name} | {metrics.get('r2', 0):.4f} | R{metrics.get('rmse', 0):,.0f} | "
-                            f"R{metrics.get('mae', 0):,.0f} | {metrics.get('mape', 0):.1f}% |\n")
+                    # Handle potentially large numbers
+                    rmse = metrics.get('rmse', 0)
+                    mae = metrics.get('mae', 0)
+
+                    if rmse > 1e6:
+                        rmse_str = f"{rmse:.2e}"
+                    else:
+                        rmse_str = f"{rmse:,.0f}"
+
+                    if mae > 1e6:
+                        mae_str = f"{mae:.2e}"
+                    else:
+                        mae_str = f"{mae:,.0f}"
+
+                    f.write(f"| {model_name} | {metrics.get('r2', 0):.4f} | R{rmse_str} | "
+                            f"R{mae_str} | {metrics.get('mape', 0):.1f}% |\n")
             else:
                 f.write("No model results available.\n")
             f.write("\n")
@@ -529,7 +591,9 @@ class ModelingPipeline:
 
             f.write("## Files Generated\n\n")
             f.write("### Models\n")
-            f.write("- `best_model.pkl`: Best trained model\n")
+            if report['best_model']['name']:
+                f.write(
+                    f"- `best_{report['best_model']['name']}.pkl`: Best trained model\n")
             f.write("- `preprocessor.pkl`: Feature preprocessor\n")
             f.write("- `model_comparison.csv`: Model performance comparison\n")
             f.write("- `model_comparison.json`: Detailed model metrics\n")
@@ -566,6 +630,7 @@ class ModelingPipeline:
                 "6. **Model Explainability**: Expand SHAP analysis for business stakeholders\n")
             f.write(
                 "7. **Automation**: Automate the entire pipeline for regular updates\n")
+
             # Evaluation Metrics Note
             f.write("## Note on Evaluation Metrics\n\n")
             f.write(
@@ -594,10 +659,10 @@ class ModelingPipeline:
             print(f"\n🏆 BEST MODEL: {self.modeler.best_model_name}")
             if self.modeler.best_model_name in self.modeler.results:
                 metrics = self.modeler.results[self.modeler.best_model_name]
-                print(f"  R² Score: {metrics['r2']:.4f}")
-                print(f"  RMSE: R{metrics['rmse']:,.2f}")
-                print(f"  MAE: R{metrics['mae']:,.2f}")
-                print(f"  MAPE: {metrics['mape']:.2f}%")
+                print(f"  R² Score: {metrics.get('r2', 'N/A')}")
+                print(f"  RMSE: R{metrics.get('rmse', 'N/A'):,.2f}")
+                print(f"  MAE: R{metrics.get('mae', 'N/A'):,.2f}")
+                print(f"  MAPE: {metrics.get('mape', 'N/A'):.2f}%")
         else:
             print("\n⚠️  No best model identified")
 

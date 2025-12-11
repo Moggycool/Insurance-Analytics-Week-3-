@@ -147,11 +147,14 @@ class ClaimSeverityModeler:
         """
         Train multiple models for claim severity prediction.
 
+        IMPORTANT: y_train and y_test should be LOG-TRANSFORMED values.
+        The models are trained on log scale and predictions are converted back.
+
         Args:
             X_train: Training features
-            y_train: Training target (log-transformed)
+            y_train: Training target (log-transformed: log(1 + TotalClaims))
             X_test: Test features (optional)
-            y_test: Test target (optional)
+            y_test: Test target (optional, log-transformed)
             use_cv: Whether to use cross-validation
             cv_folds: Number of cross-validation folds
             save_models: Whether to save trained models
@@ -166,6 +169,9 @@ class ClaimSeverityModeler:
         self.results = {}
         cv_results = {}
 
+        # Validate inputs to prevent infinite errors
+        self._validate_training_data(X_train, y_train)
+
         for name, config in self.model_configs.items():
             logger.info(f"\n{'='*40}")
             logger.info(f"Training {name}")
@@ -174,6 +180,11 @@ class ClaimSeverityModeler:
             try:
                 # Initialize model
                 model = config['model']
+
+                # Validate data before training
+                if not self._is_data_valid(X_train, y_train):
+                    logger.warning(f"Skipping {name} due to invalid data")
+                    continue
 
                 # Cross-validation if requested
                 if use_cv:
@@ -190,6 +201,7 @@ class ClaimSeverityModeler:
                         verbose=0
                     )
 
+                    # Convert from log scale to original scale for reporting
                     cv_rmse = np.sqrt(-cv_scores.mean())
                     cv_std = np.sqrt(cv_scores.std())
 
@@ -216,12 +228,24 @@ class ClaimSeverityModeler:
                 if X_test is not None and y_test is not None:
                     logger.info("Evaluating on test set...")
 
-                    # Make predictions
+                    # Validate test data
+                    if not self._is_data_valid(X_test, y_test):
+                        logger.warning(
+                            f"Skipping evaluation for {name} due to invalid test data")
+                        continue
+
+                    # Make predictions on log scale
                     y_pred_log = model.predict(X_test)
 
-                    # Convert from log scale to original
+                    # Handle any NaN or infinite predictions
+                    y_pred_log = self._clean_predictions(y_pred_log)
+
+                    # Convert from log scale to original scale for evaluation
                     y_test_original = np.expm1(y_test)
                     y_pred_original = np.expm1(y_pred_log)
+
+                    # Ensure no negative predictions after transformation
+                    y_pred_original = np.maximum(y_pred_original, 0)
 
                     # Calculate metrics
                     metrics = self._calculate_metrics(
@@ -258,18 +282,25 @@ class ClaimSeverityModeler:
 
         # Identify best model based on R² score
         if self.results:
-            self.best_model_name = max(self.results.keys(),
-                                       key=lambda x: self.results[x]['r2'])
-            self.best_model = self.models[self.best_model_name]
+            # Filter out models with NaN or invalid R² scores
+            valid_results = {k: v for k, v in self.results.items()
+                             if not np.isnan(v.get('r2', np.nan)) and v.get('r2', -np.inf) > -np.inf}
 
-            logger.info(f"\n{'='*60}")
-            logger.info(f"🏆 BEST MODEL: {self.best_model_name}")
-            logger.info(f"{'='*60}")
-            best_metrics = self.results[self.best_model_name]
-            logger.info(f"R² Score: {best_metrics['r2']:.4f}")
-            logger.info(f"RMSE: R{best_metrics['rmse']:,.2f}")
-            logger.info(f"MAE: R{best_metrics['mae']:,.2f}")
-            logger.info(f"MAPE: {best_metrics['mape']:.2f}%")
+            if valid_results:
+                self.best_model_name = max(valid_results.keys(),
+                                           key=lambda x: valid_results[x]['r2'])
+                self.best_model = self.models.get(self.best_model_name)
+
+                logger.info(f"\n{'='*60}")
+                logger.info(f"🏆 BEST MODEL: {self.best_model_name}")
+                logger.info(f"{'='*60}")
+                best_metrics = self.results[self.best_model_name]
+                logger.info(f"R² Score: {best_metrics['r2']:.4f}")
+                logger.info(f"RMSE: R{best_metrics['rmse']:,.2f}")
+                logger.info(f"MAE: R{best_metrics['mae']:,.2f}")
+                logger.info(f"MAPE: {best_metrics['mape']:.2f}%")
+            else:
+                logger.warning("No valid models with R² scores found")
 
         # Save cross-validation results if available
         if cv_results:
@@ -279,6 +310,71 @@ class ClaimSeverityModeler:
             logger.info(f"💾 Saved cross-validation results to: {cv_file}")
 
         return self.models
+
+    def _validate_training_data(self, X: np.ndarray, y: np.ndarray) -> None:
+        """Validate training data before modeling."""
+        logger.info("Validating training data...")
+
+        # Check for NaN values
+        x_nan = np.isnan(X).any()
+        y_nan = np.isnan(y).any()
+
+        if x_nan or y_nan:
+            logger.warning(f"NaN values found: X={x_nan}, y={y_nan}")
+
+        # Check for infinite values
+        x_inf = np.isinf(X).any()
+        y_inf = np.isinf(y).any()
+
+        if x_inf or y_inf:
+            logger.warning(f"Infinite values found: X={x_inf}, y={y_inf}")
+
+        # Check data shapes
+        if X.shape[0] != y.shape[0]:
+            raise ValueError(
+                f"X and y have different number of samples: {X.shape[0]} vs {y.shape[0]}")
+
+        logger.info(
+            f"Training data: {X.shape[0]} samples, {X.shape[1]} features")
+        logger.info(
+            f"Target range (log scale): [{y.min():.2f}, {y.max():.2f}]")
+
+    def _is_data_valid(self, X: np.ndarray, y: np.ndarray) -> bool:
+        """Check if data is valid for training/prediction."""
+        if X is None or y is None:
+            return False
+
+        if len(X) == 0 or len(y) == 0:
+            return False
+
+        if np.isnan(X).any() or np.isnan(y).any():
+            logger.warning("NaN values detected in data")
+            return False
+
+        if np.isinf(X).any() or np.isinf(y).any():
+            logger.warning("Infinite values detected in data")
+            return False
+
+        return True
+
+    def _clean_predictions(self, y_pred: np.ndarray) -> np.ndarray:
+        """Clean predictions by handling NaN and infinite values."""
+        y_pred_clean = y_pred.copy()
+
+        # Replace NaN with median
+        if np.isnan(y_pred_clean).any():
+            median_val = np.nanmedian(y_pred_clean)
+            y_pred_clean = np.nan_to_num(y_pred_clean, nan=median_val)
+
+        # Replace infinite values with finite bounds
+        if np.isinf(y_pred_clean).any():
+            finite_vals = y_pred_clean[np.isfinite(y_pred_clean)]
+            if len(finite_vals) > 0:
+                max_val = np.max(finite_vals)
+                min_val = np.min(finite_vals)
+                y_pred_clean = np.clip(y_pred_clean, min_val, max_val)
+
+        return y_pred_clean
 
     def hyperparameter_tuning(self,
                               X_train: np.ndarray,
@@ -291,7 +387,7 @@ class ClaimSeverityModeler:
 
         Args:
             X_train: Training features
-            y_train: Training target
+            y_train: Training target (log-transformed)
             model_name: Name of model to tune (None for all models)
             cv_folds: Number of cross-validation folds
             n_iter: Number of iterations for random search
@@ -315,6 +411,12 @@ class ClaimSeverityModeler:
             config = self.model_configs[name]
 
             try:
+                # Validate data before tuning
+                if not self._is_data_valid(X_train, y_train):
+                    logger.warning(
+                        f"Skipping tuning for {name} due to invalid data")
+                    continue
+
                 # Use randomized search for faster tuning
                 random_search = RandomizedSearchCV(
                     estimator=config['model'],
@@ -332,8 +434,9 @@ class ClaimSeverityModeler:
                 random_search.fit(X_train, y_train)
 
                 logger.info(f"Best parameters: {random_search.best_params_}")
+                best_cv_score = np.sqrt(-random_search.best_score_)
                 logger.info(
-                    f"Best CV score (RMSE): {np.sqrt(-random_search.best_score_):.4f}")
+                    f"Best CV score (RMSE on log scale): {best_cv_score:.4f}")
 
                 # Update model with best parameters
                 best_model = random_search.best_estimator_
@@ -356,13 +459,14 @@ class ClaimSeverityModeler:
         return tuned_models
 
     def _calculate_metrics(self, y_true: np.ndarray, y_pred: np.ndarray) -> Dict:
-        """Calculate evaluation metrics."""
+        """Calculate evaluation metrics with robust handling."""
         # Handle any NaN or infinite values
         mask = np.isfinite(y_true) & np.isfinite(y_pred)
-        y_true = y_true[mask]
-        y_pred = y_pred[mask]
+        y_true_clean = y_true[mask]
+        y_pred_clean = y_pred[mask]
 
-        if len(y_true) == 0:
+        if len(y_true_clean) == 0 or len(y_pred_clean) == 0:
+            logger.warning("No valid data points for metric calculation")
             return {
                 'rmse': np.nan,
                 'mae': np.nan,
@@ -372,14 +476,66 @@ class ClaimSeverityModeler:
                 'smape': np.nan
             }
 
-        metrics = {
-            'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
-            'mae': mean_absolute_error(y_true, y_pred),
-            'r2': r2_score(y_true, y_pred),
-            'mape': np.mean(np.abs((y_true - y_pred) / (y_true + 1e-10))) * 100,
-            'mpe': np.mean((y_true - y_pred) / (y_true + 1e-10)) * 100,
-            'smape': 100 * np.mean(2 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred) + 1e-10))
-        }
+        # Check for zero or negative values that could cause issues
+        if (y_true_clean <= 0).any():
+            logger.warning(
+                "Zero or negative values in y_true, using adjusted MAPE calculation")
+
+        # Calculate metrics with error handling
+        try:
+            rmse = np.sqrt(mean_squared_error(y_true_clean, y_pred_clean))
+            mae = mean_absolute_error(y_true_clean, y_pred_clean)
+
+            # Calculate R² with fallback
+            try:
+                r2 = r2_score(y_true_clean, y_pred_clean)
+            except:
+                r2 = 1 - (np.sum((y_true_clean - y_pred_clean) ** 2) /
+                          np.sum((y_true_clean - np.mean(y_true_clean)) ** 2))
+
+            # Calculate MAPE with protection against division by zero
+            nonzero_mask = y_true_clean != 0
+            if nonzero_mask.any():
+                mape = np.mean(np.abs((y_true_clean[nonzero_mask] - y_pred_clean[nonzero_mask]) /
+                                      y_true_clean[nonzero_mask])) * 100
+            else:
+                mape = np.nan
+
+            # Calculate MPE
+            if nonzero_mask.any():
+                mpe = np.mean((y_true_clean[nonzero_mask] - y_pred_clean[nonzero_mask]) /
+                              y_true_clean[nonzero_mask]) * 100
+            else:
+                mpe = np.nan
+
+            # Calculate SMAPE
+            denominator = np.abs(y_true_clean) + np.abs(y_pred_clean)
+            nonzero_denom = denominator != 0
+            if nonzero_denom.any():
+                smape = 100 * np.mean(2 * np.abs(y_pred_clean[nonzero_denom] - y_true_clean[nonzero_denom]) /
+                                      denominator[nonzero_denom])
+            else:
+                smape = np.nan
+
+            metrics = {
+                'rmse': rmse,
+                'mae': mae,
+                'r2': r2,
+                'mape': mape,
+                'mpe': mpe,
+                'smape': smape
+            }
+
+        except Exception as e:
+            logger.error(f"Error calculating metrics: {str(e)}")
+            metrics = {
+                'rmse': np.nan,
+                'mae': np.nan,
+                'r2': np.nan,
+                'mape': np.nan,
+                'mpe': np.nan,
+                'smape': np.nan
+            }
 
         return metrics
 
@@ -402,12 +558,23 @@ class ClaimSeverityModeler:
         """
         logger.info(f"\nEvaluating {model_name}...")
 
-        # Predictions
+        # Validate data
+        if not self._is_data_valid(X_test, y_test):
+            logger.warning(f"Cannot evaluate {model_name} - invalid test data")
+            return None
+
+        # Make predictions on log scale
         y_pred_log = model.predict(X_test)
 
-        # Convert from log scale to original
+        # Clean predictions
+        y_pred_log = self._clean_predictions(y_pred_log)
+
+        # Convert from log scale to original scale
         y_test_original = np.expm1(y_test)
         y_pred_original = np.expm1(y_pred_log)
+
+        # Ensure no negative predictions
+        y_pred_original = np.maximum(y_pred_original, 0)
 
         # Calculate metrics
         metrics = self._calculate_metrics(y_test_original, y_pred_original)
@@ -543,13 +710,19 @@ class ClaimSeverityModeler:
                 'R²': metrics['r2'],
                 'RMSE': metrics['rmse'],
                 'MAE': metrics['mae'],
-                'MAPE': f"{metrics['mape']:.2f}%",
-                'SMAPE': f"{metrics['smape']:.2f}%",
-                'MPE': f"{metrics['mpe']:.2f}%"
+                'MAPE': f"{metrics['mape']:.2f}%" if not np.isnan(metrics['mape']) else 'N/A',
+                'SMAPE': f"{metrics['smape']:.2f}%" if not np.isnan(metrics['smape']) else 'N/A',
+                'MPE': f"{metrics['mpe']:.2f}%" if not np.isnan(metrics['mpe']) else 'N/A'
             })
 
         comparison_df = pd.DataFrame(comparison_data)
-        comparison_df = comparison_df.sort_values('R²', ascending=False)
+
+        # Sort by R², handling NaN values
+        comparison_df['R²_numeric'] = pd.to_numeric(
+            comparison_df['R²'], errors='coerce')
+        comparison_df = comparison_df.sort_values(
+            'R²_numeric', ascending=False)
+        comparison_df = comparison_df.drop(columns=['R²_numeric'])
 
         # Save to CSV
         report_file = self.model_dir / 'model_comparison.csv'
@@ -609,43 +782,40 @@ class ClaimSeverityModeler:
         if not self.results:
             raise ValueError("No results available. Train models first.")
 
-        models = list(self.results.keys())
+        # Filter out models with NaN values for the selected metric
+        models_with_metrics = []
+        scores = []
 
-        # Initialize scores variable
-        scores = None
+        for model_name, metrics in self.results.items():
+            if metric in metrics and not np.isnan(metrics[metric]):
+                models_with_metrics.append(model_name)
+                scores.append(metrics[metric])
 
-        # Determine which metric to use
-        if metric == 'r2':
-            scores = [self.results[m]['r2'] for m in models]
-            ylabel = 'R² Score'
-            color = 'skyblue'
-        elif metric == 'rmse':
-            scores = [self.results[m]['rmse'] for m in models]
-            ylabel = 'RMSE (R)'
-            color = 'lightcoral'
-        elif metric == 'mae':
-            scores = [self.results[m]['mae'] for m in models]
-            ylabel = 'MAE (R)'
-            color = 'lightgreen'
-        elif metric == 'mape':
-            scores = [self.results[m]['mape'] for m in models]
-            ylabel = 'MAPE (%)'
-            color = 'gold'
-        else:
+        if not models_with_metrics:
+            logger.warning(f"No models with valid {metric} scores found")
+            return
+
+        # Determine ylabel and color based on metric
+        metric_config = {
+            'r2': ('R² Score', 'skyblue'),
+            'rmse': ('RMSE (R)', 'lightcoral'),
+            'mae': ('MAE (R)', 'lightgreen'),
+            'mape': ('MAPE (%)', 'gold')
+        }
+
+        if metric not in metric_config:
             raise ValueError(f"Unknown metric: {metric}")
 
-        # Check if scores were properly assigned
-        if scores is None:
-            raise ValueError(
-                f"Could not calculate scores for metric: {metric}")
+        ylabel, color = metric_config[metric]
 
         # Create figure
         plt.figure(figsize=(12, 6))
-        bars = plt.bar(models, scores, color=color, edgecolor='black')
+        bars = plt.bar(models_with_metrics, scores,
+                       color=color, edgecolor='black')
 
         # Highlight best model
-        if self.best_model_name:
-            best_idx = models.index(self.best_model_name)
+        if self.best_model_name in models_with_metrics:
+            best_idx = models_with_metrics.index(self.best_model_name)
             bars[best_idx].set_color('darkorange')
             bars[best_idx].set_edgecolor('darkred')
 
@@ -660,13 +830,17 @@ class ClaimSeverityModeler:
         for bar in bars:
             height = bar.get_height()
             if metric in ['r2']:
-                plt.text(bar.get_x() + bar.get_width()/2., height,
-                         f'{height:.3f}', ha='center', va='bottom', fontsize=10)
-            else:
-                plt.text(bar.get_x() + bar.get_width()/2., height,
-                         f'{height:,.0f}' if metric in [
-                             'rmse', 'mae'] else f'{height:.1f}%',
-                         ha='center', va='bottom', fontsize=10)
+                label = f'{height:.3f}'
+            elif metric in ['rmse', 'mae']:
+                if height > 1e6:
+                    label = f'{height:.2e}'
+                else:
+                    label = f'{height:,.0f}'
+            else:  # mape
+                label = f'{height:.1f}%'
+
+            plt.text(bar.get_x() + bar.get_width()/2., height,
+                     label, ha='center', va='bottom', fontsize=10)
 
         plt.tight_layout()
         plot_file = self.model_dir / f'model_comparison_{metric}.png'
@@ -696,39 +870,50 @@ class ClaimSeverityModeler:
         ]
 
         for idx, (metric, title, color) in enumerate(metrics_config):
-            # Initialize scores for each metric
+            # Collect scores for each model
             scores = []
-            for model in models:
-                if metric in self.results[model]:
-                    scores.append(self.results[model][metric])
-                else:
-                    scores.append(0)  # Default value if metric not found
+            valid_models = []
 
-            bars = axes[idx].bar(
-                models, scores, color=color, edgecolor='black')
+            for model in models:
+                if metric in self.results[model] and not np.isnan(self.results[model][metric]):
+                    scores.append(self.results[model][metric])
+                    valid_models.append(model)
+
+            if not scores:
+                axes[idx].text(0.5, 0.5, f'No valid {metric} data',
+                               ha='center', va='center', transform=axes[idx].transAxes)
+                axes[idx].set_title(title, fontsize=12, fontweight='bold')
+                continue
+
+            bars = axes[idx].bar(valid_models, scores,
+                                 color=color, edgecolor='black')
 
             # Highlight best model (only in first plot for clarity)
-            if self.best_model_name and idx == 0:
-                best_idx = models.index(self.best_model_name)
+            if self.best_model_name in valid_models and idx == 0:
+                best_idx = valid_models.index(self.best_model_name)
                 bars[best_idx].set_color('darkorange')
                 bars[best_idx].set_edgecolor('darkred')
 
             axes[idx].set_title(title, fontsize=12, fontweight='bold')
             axes[idx].set_xticklabels(
-                models, rotation=45, ha='right', fontsize=9)
+                valid_models, rotation=45, ha='right', fontsize=9)
             axes[idx].grid(True, alpha=0.3, axis='y')
 
             # Add value labels
             for bar in bars:
                 height = bar.get_height()
                 if metric == 'r2':
-                    axes[idx].text(bar.get_x() + bar.get_width()/2., height,
-                                   f'{height:.3f}', ha='center', va='bottom', fontsize=8)
-                else:
-                    axes[idx].text(bar.get_x() + bar.get_width()/2., height,
-                                   f'{height:,.0f}' if metric in [
-                                       'rmse', 'mae'] else f'{height:.1f}%',
-                                   ha='center', va='bottom', fontsize=8)
+                    label = f'{height:.3f}'
+                elif metric in ['rmse', 'mae']:
+                    if height > 1e6:
+                        label = f'{height:.2e}'
+                    else:
+                        label = f'{height:,.0f}'
+                else:  # mape
+                    label = f'{height:.1f}%'
+
+                axes[idx].text(bar.get_x() + bar.get_width()/2., height,
+                               label, ha='center', va='bottom', fontsize=8)
 
         plt.suptitle('Model Performance Comparison',
                      fontsize=16, fontweight='bold')
@@ -777,13 +962,24 @@ class ClaimSeverityModeler:
         Returns:
             Predictions (original scale or log scale)
         """
-        # Make predictions
+        # Validate input
+        if not self._is_data_valid(X, np.zeros(X.shape[0])):
+            logger.warning("Invalid input data for prediction")
+            return None
+
+        # Make predictions on log scale
         y_pred_log = model.predict(X)
+
+        # Clean predictions
+        y_pred_log = self._clean_predictions(y_pred_log)
 
         if return_log:
             return y_pred_log
         else:
-            return np.expm1(y_pred_log)
+            # Convert to original scale
+            y_pred = np.expm1(y_pred_log)
+            y_pred = np.maximum(y_pred, 0)  # Ensure non-negative
+            return y_pred
 
     def get_model_summary(self) -> Dict:
         """Get summary of all trained models."""

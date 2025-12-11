@@ -10,6 +10,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
+from scipy.stats import spearmanr
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -28,6 +29,7 @@ class FeatureEngineer:
         self.preprocessor = None
         self.feature_names = None
         self.training_columns_ = None
+        self.training_stats_ = {}  # Store training statistics for test data
 
         # Configuration
         self.onehot_threshold = 20  # Max categories for one-hot encoding
@@ -123,7 +125,8 @@ class FeatureEngineer:
 
     def fit_transform_features(self,
                                X_train: pd.DataFrame,
-                               X_test: pd.DataFrame = None) -> Tuple:
+                               X_test: pd.DataFrame = None,
+                               y_train: pd.Series = None) -> Tuple:
         """
         Fit preprocessing on training data and transform both train and test.
         Ensures test data has same columns as training data.
@@ -131,89 +134,57 @@ class FeatureEngineer:
         Args:
             X_train: Training features
             X_test: Test features (optional)
+            y_train: Training target (optional, for feature scaling reference only)
 
         Returns:
             Tuple of (X_train_transformed, X_test_transformed or None)
         """
         logger.info("Fitting and transforming features...")
 
+        # Create features BEFORE preprocessing (without target leakage)
+        X_train_features = self.create_additional_features(
+            X_train, is_training=True)
+
         # Store training columns
-        self.training_columns_ = X_train.columns.tolist()
+        self.training_columns_ = X_train_features.columns.tolist()
         logger.info(f"Training data has {len(self.training_columns_)} columns")
 
         # Identify feature types
-        self.identify_feature_types(X_train)
+        self.identify_feature_types(X_train_features)
 
         # Create preprocessing pipeline
         self.create_preprocessing_pipeline()
 
         # Fit and transform training data
         logger.info("Fitting preprocessor on training data...")
-        X_train_transformed = self.preprocessor.fit_transform(X_train)
+        X_train_transformed = self.preprocessor.fit_transform(X_train_features)
 
         # Get feature names
-        self._get_feature_names(X_train)
+        self._get_feature_names(X_train_features)
 
         # Transform test data if provided
         X_test_transformed = None
         if X_test is not None:
             logger.info("Transforming test data...")
 
-            # Check if test data has all required columns
-            missing_cols = set(self.training_columns_) - set(X_test.columns)
+            # Create features for test data WITHOUT using any target information
+            X_test_features = self.create_additional_features(
+                X_test, is_training=False)
 
-            if missing_cols:
-                logger.warning(f"Test data missing {len(missing_cols)} columns. "
-                               f"Adding them with default values.")
+            # Align test data to match training columns
+            X_test_aligned = self._align_test_data(X_test_features)
 
-                # Add missing columns to test data
-                for col in missing_cols:
-                    if col in self.numerical_features:
-                        # For numerical columns, use median from training
-                        if col in X_train.columns:
-                            default_value = X_train[col].median()
-                        else:
-                            default_value = 0
-                        X_test[col] = default_value
-                        logger.debug(
-                            f"  Added numerical column '{col}' with value: {default_value}")
-                    elif col in self.categorical_features:
-                        # For categorical columns, use mode from training
-                        if col in X_train.columns:
-                            mode_values = X_train[col].mode()
-                            default_value = mode_values[0] if not mode_values.empty else 'Unknown'
-                        else:
-                            default_value = 'Unknown'
-                        X_test[col] = default_value
-                        logger.debug(
-                            f"  Added categorical column '{col}' with value: '{default_value}'")
-                    else:
-                        # For other columns, use 0 or appropriate default
-                        X_test[col] = 0
-                        logger.debug(
-                            f"  Added column '{col}' with default value: 0")
-
-            # Also check for extra columns in test data (not in training)
-            extra_cols = set(X_test.columns) - set(self.training_columns_)
-            if extra_cols:
-                logger.warning(f"Test data has {len(extra_cols)} extra columns. "
-                               f"Dropping them to match training data.")
-                X_test = X_test[self.training_columns_]
-
-            # Ensure column order matches training data
-            if not all(X_test.columns == self.training_columns_):
-                logger.debug("Reordering test columns to match training data")
-                X_test = X_test[self.training_columns_]
-
-            # Now transform the aligned test data
+            # Transform
             try:
-                X_test_transformed = self.preprocessor.transform(X_test)
+                X_test_transformed = self.preprocessor.transform(
+                    X_test_aligned)
                 logger.info(
                     f"  Test features shape: {X_test_transformed.shape}")
             except Exception as e:
                 logger.error(f"Error transforming test data: {str(e)}")
                 logger.error(f"Training columns: {self.training_columns_}")
-                logger.error(f"Test columns: {X_test.columns.tolist()}")
+                logger.error(
+                    f"Test columns: {X_test_features.columns.tolist()}")
                 raise
 
         logger.info(f"  Training features shape: {X_train_transformed.shape}")
@@ -221,6 +192,38 @@ class FeatureEngineer:
             f"  Total features after preprocessing: {X_train_transformed.shape[1]}")
 
         return X_train_transformed, X_test_transformed
+
+    def _align_test_data(self, X_test: pd.DataFrame) -> pd.DataFrame:
+        """
+        Align test data columns to match training data.
+
+        Args:
+            X_test: Test data to align
+
+        Returns:
+            Aligned test data
+        """
+        X_aligned = X_test.copy()
+
+        # Add missing columns with appropriate defaults
+        missing_cols = set(self.training_columns_) - set(X_aligned.columns)
+        for col in missing_cols:
+            if col in self.numerical_features:
+                X_aligned[col] = 0
+            elif col in self.categorical_features:
+                X_aligned[col] = 'missing'
+            else:
+                X_aligned[col] = 0
+
+        # Remove extra columns
+        extra_cols = set(X_aligned.columns) - set(self.training_columns_)
+        if extra_cols:
+            X_aligned = X_aligned.drop(columns=list(extra_cols))
+
+        # Ensure correct order
+        X_aligned = X_aligned[self.training_columns_]
+
+        return X_aligned
 
     def _align_columns(self, X: pd.DataFrame, reference_columns: list = None) -> pd.DataFrame:
         """
@@ -275,8 +278,12 @@ class FeatureEngineer:
             raise ValueError(
                 "Preprocessor has not been created. Call create_preprocessing_pipeline first.")
 
+        # Create features for new data
+        X_new_features = self.create_additional_features(
+            X_new, is_training=False)
+
         # Align columns to match training
-        X_new_aligned = self._align_columns(X_new)
+        X_new_aligned = self._align_columns(X_new_features)
 
         # Transform
         return self.preprocessor.transform(X_new_aligned)
@@ -313,13 +320,13 @@ class FeatureEngineer:
 
         return feature_names
 
-    def create_additional_features(self, X: pd.DataFrame, y: pd.Series = None) -> pd.DataFrame:
+    def create_additional_features(self, X: pd.DataFrame, is_training: bool = True) -> pd.DataFrame:
         """
-        Create additional interaction and polynomial features.
+        Create additional interaction and polynomial features WITHOUT target leakage.
 
         Args:
             X: Input features
-            y: Target variable (optional, for target encoding)
+            is_training: Whether this is training data (store statistics if True)
 
         Returns:
             DataFrame with additional features
@@ -333,7 +340,7 @@ class FeatureEngineer:
         if self.numerical_features is None:
             self.identify_feature_types(X)
 
-        # 1. Polynomial features for important numerical columns
+        # 1. Polynomial features for important numerical columns (SAFE - no target leakage)
         important_num_cols = ['VehicleAge', 'SumInsured',
                               'TotalPremium', 'cubiccapacity']
         available_num_cols = [
@@ -341,49 +348,93 @@ class FeatureEngineer:
 
         for col in available_num_cols:
             try:
-                # Skip if column has too many zeros or constant values
+                # Check if column has enough variation
                 if X_enhanced[col].nunique() > 1:
-                    X_enhanced[f'{col}_squared'] = X_enhanced[col] ** 2
-                    X_enhanced[f'{col}_cubed'] = X_enhanced[col] ** 3
-                    # Use log1p to handle zeros
+                    # Store min/max for clipping if training
+                    if is_training:
+                        self.training_stats_[
+                            f'{col}_min'] = X_enhanced[col].min()
+                        self.training_stats_[
+                            f'{col}_max'] = X_enhanced[col].max()
+
+                    # Square (clip to prevent overflow)
+                    col_squared = X_enhanced[col] ** 2
+                    X_enhanced[f'{col}_squared'] = np.clip(
+                        col_squared, -1e10, 1e10)
+
+                    # Cube (clip to prevent overflow)
+                    col_cubed = X_enhanced[col] ** 3
+                    X_enhanced[f'{col}_cubed'] = np.clip(
+                        col_cubed, -1e10, 1e10)
+
+                    # Log transform (add small epsilon to avoid log(0))
+                    eps = 1e-10
                     X_enhanced[f'log_{col}'] = np.log1p(
-                        np.abs(X_enhanced[col]))
+                        np.abs(X_enhanced[col] + eps))
             except Exception as e:
                 logger.warning(
                     f"Could not create polynomial features for {col}: {str(e)}")
 
-        # 2. Interaction features (with error handling)
+        # 2. Interaction features (SAFE - no target leakage)
+        # Age-Value interaction (but be careful with scale)
         try:
             if 'VehicleAge' in X_enhanced.columns and 'SumInsured' in X_enhanced.columns:
-                X_enhanced['Age_Value_Interaction'] = X_enhanced['VehicleAge'] * \
-                    X_enhanced['SumInsured']
-                # Avoid division by zero
-                denominator = X_enhanced['SumInsured'].replace(0, np.nan)
-                X_enhanced['Age_Value_Ratio'] = X_enhanced['VehicleAge'] / denominator
+                # Clip values to prevent overflow
+                age_clipped = np.clip(X_enhanced['VehicleAge'], 0, 50)
+                sum_insured_clipped = np.clip(
+                    X_enhanced['SumInsured'], 1000, 1000000)
+
+                X_enhanced['Age_Value_Interaction'] = age_clipped * \
+                    sum_insured_clipped
+
+                # Ratio with protection against division by zero
+                denominator = sum_insured_clipped.replace(0, np.nan)
+                X_enhanced['Age_Value_Ratio'] = age_clipped / denominator
                 X_enhanced['Age_Value_Ratio'] = X_enhanced['Age_Value_Ratio'].fillna(
                     0)
+
+                # Clip extreme values
+                X_enhanced['Age_Value_Ratio'] = np.clip(
+                    X_enhanced['Age_Value_Ratio'], -100, 100)
         except Exception as e:
             logger.warning(f"Could not create interaction features: {str(e)}")
 
+        # 3. Premium ratio (SAFE - no target leakage)
         try:
             if 'TotalPremium' in X_enhanced.columns and 'SumInsured' in X_enhanced.columns:
-                denominator = X_enhanced['SumInsured'].replace(0, np.nan)
-                X_enhanced['Premium_Per_Value'] = X_enhanced['TotalPremium'] / denominator
+                # Clip to prevent extreme values
+                premium_clipped = np.clip(
+                    X_enhanced['TotalPremium'], 100, 10000)
+                sum_insured_clipped = np.clip(
+                    X_enhanced['SumInsured'], 1000, 1000000)
+
+                denominator = sum_insured_clipped.replace(0, np.nan)
+                X_enhanced['Premium_Per_Value'] = premium_clipped / denominator
                 X_enhanced['Premium_Per_Value'] = X_enhanced['Premium_Per_Value'].fillna(
                     0)
-        except:
-            pass
 
-        # 3. Risk score features
+                # Clip to reasonable range
+                X_enhanced['Premium_Per_Value'] = np.clip(
+                    X_enhanced['Premium_Per_Value'], 0, 0.1)
+        except Exception as e:
+            logger.warning(f"Could not create premium ratio: {str(e)}")
+
+        # 4. Risk score features (using existing features only, no target)
         risk_factors = []
         if 'VehicleAge' in X_enhanced.columns:
-            risk_factors.append(
-                (X_enhanced['VehicleAge'] > 10).astype(int))  # Old vehicles
+            # Old vehicles (based on VehicleAge only)
+            risk_factors.append((X_enhanced['VehicleAge'] > 10).astype(int))
 
         if 'cubiccapacity' in X_enhanced.columns:
-            median_cc = X_enhanced['cubiccapacity'].median()
+            # Large engine (use median from training if available, otherwise calculate)
+            if is_training:
+                median_cc = X_enhanced['cubiccapacity'].median()
+                self.training_stats_['cubiccapacity_median'] = median_cc
+            else:
+                median_cc = self.training_stats_.get(
+                    'cubiccapacity_median', X_enhanced['cubiccapacity'].median())
+
             risk_factors.append(
-                # Large engine
                 (X_enhanced['cubiccapacity'] > median_cc).astype(int))
 
         if 'HasHighPower' in X_enhanced.columns:
@@ -392,38 +443,12 @@ class FeatureEngineer:
         if risk_factors:
             X_enhanced['Risk_Score'] = sum(risk_factors) / len(risk_factors)
 
-        # 4. Target encoding if y is provided
-        if y is not None and len(self.categorical_features) > 0:
-            logger.info("Creating target-encoded features...")
-            # Limit to top 3 categorical
-            for col in self.categorical_features[:3]:
-                if col in X_enhanced.columns and X_enhanced[col].nunique() > 1:
-                    try:
-                        # Calculate mean target per category
-                        target_df = pd.DataFrame(
-                            {'feature': X_enhanced[col], 'target': y})
-                        target_means = target_df.groupby(
-                            'feature')['target'].mean().to_dict()
-
-                        X_enhanced[f'{col}_TargetEncoded'] = X_enhanced[col].map(
-                            target_means)
-                        # Fill NaN with overall mean
-                        overall_mean = X_enhanced[f'{col}_TargetEncoded'].mean(
-                        )
-                        X_enhanced[f'{col}_TargetEncoded'] = X_enhanced[f'{col}_TargetEncoded'].fillna(
-                            overall_mean)
-                    except Exception as e:
-                        logger.warning(
-                            f"Could not create target encoding for {col}: {str(e)}")
-
-        # 5. Binning numerical features (with robust binning)
+        # 5. Binning numerical features (store bin edges if training)
         try:
             if 'VehicleAge' in X_enhanced.columns:
-                # Use custom bins instead of pd.cut to avoid edge cases
                 bins = [0, 3, 7, 12, 20, 100]
                 labels = ['New', 'Young', 'Middle', 'Old', 'VeryOld']
 
-                # Handle edge cases
                 X_enhanced['VehicleAge'] = X_enhanced['VehicleAge'].clip(
                     0, 100)
                 X_enhanced['VehicleAge_Binned'] = pd.cut(
@@ -432,39 +457,47 @@ class FeatureEngineer:
                     labels=labels,
                     include_lowest=True
                 )
+
+                if is_training:
+                    self.training_stats_['VehicleAge_bins'] = bins
         except Exception as e:
             logger.warning(f"Could not bin VehicleAge: {str(e)}")
 
+        # 6. Binning SumInsured (handle edge cases)
         try:
             if 'SumInsured' in X_enhanced.columns:
-                # Use pd.qcut with duplicates='drop' to handle duplicate bin edges
-                try:
-                    X_enhanced['SumInsured_Binned'] = pd.qcut(
-                        X_enhanced['SumInsured'],
-                        q=5,
-                        labels=['VeryLow', 'Low',
-                                'Medium', 'High', 'VeryHigh'],
-                        duplicates='drop'
-                    )
-                except:
-                    # If qcut fails, use manual percentiles
-                    percentiles = X_enhanced['SumInsured'].quantile(
-                        [0, 0.2, 0.4, 0.6, 0.8, 1.0])
-                    X_enhanced['SumInsured_Binned'] = pd.cut(
-                        X_enhanced['SumInsured'],
-                        bins=percentiles.unique(),  # Use unique percentiles only
-                        labels=['VeryLow', 'Low',
-                                'Medium', 'High', 'VeryHigh'],
-                        include_lowest=True
-                    )
+                if is_training:
+                    # On training data, calculate percentiles
+                    try:
+                        # Try qcut first
+                        X_enhanced['SumInsured_Binned'] = pd.qcut(
+                            X_enhanced['SumInsured'],
+                            q=5,
+                            labels=['VeryLow', 'Low',
+                                    'Medium', 'High', 'VeryHigh'],
+                            duplicates='drop'
+                        )
+                        # Store the bins
+                        if hasattr(X_enhanced['SumInsured_Binned'].cat, 'categories'):
+                            self.training_stats_['SumInsured_bins'] = 'qcut_5'
+                    except:
+                        # If qcut fails, use manual bins
+                        percentiles = X_enhanced['SumInsured'].quantile(
+                            [0, 0.2, 0.4, 0.6, 0.8, 1.0])
+                        X_enhanced['SumInsured_Binned'] = pd.cut(
+                            X_enhanced['SumInsured'],
+                            bins=percentiles.unique(),
+                            labels=['VeryLow', 'Low',
+                                    'Medium', 'High', 'VeryHigh'],
+                            include_lowest=True
+                        )
+                        self.training_stats_[
+                            'SumInsured_bins'] = percentiles.tolist()
+                else:
+                    # On test data, use default bins or skip
+                    X_enhanced['SumInsured_Binned'] = 'Medium'  # Default value
         except Exception as e:
             logger.warning(f"Could not bin SumInsured: {str(e)}")
-
-        # 6. Create flag for missing values in original data
-        for col in original_cols:
-            if X_enhanced[col].isnull().any():
-                X_enhanced[f'{col}_Missing'] = X_enhanced[col].isnull().astype(
-                    int)
 
         new_cols = [
             col for col in X_enhanced.columns if col not in original_cols]
@@ -479,9 +512,10 @@ class FeatureEngineer:
     def select_features_using_correlation(self,
                                           X: pd.DataFrame,
                                           y: pd.Series,
-                                          threshold: float = 0.1) -> pd.DataFrame:
+                                          threshold: float = 0.05) -> pd.DataFrame:
         """
         Select features based on correlation with target.
+        But only for feature selection, not for creating new features.
 
         Args:
             X: Feature DataFrame
@@ -493,25 +527,36 @@ class FeatureEngineer:
         """
         logger.info(f"Selecting features with |correlation| > {threshold}...")
 
-        # Ensure X is numeric for correlation calculation
+        # Select only numerical features
         X_numeric = X.select_dtypes(include=[np.number]).copy()
 
         if len(X_numeric.columns) == 0:
             logger.warning("No numerical features for correlation selection")
             return X
 
+        # Filter out features with extreme values that might cause correlation issues
+        safe_features = []
+        for col in X_numeric.columns:
+            # Check for finite values
+            if X_numeric[col].notna().all():
+                # Check for reasonable range (no infinities)
+                if not np.any(np.isinf(X_numeric[col])):
+                    if X_numeric[col].nunique() > 1:
+                        safe_features.append(col)
+
+        if not safe_features:
+            return X
+
+        X_safe = X_numeric[safe_features]
+
         # Calculate correlations
         correlations = []
-        for col in X_numeric.columns:
+        for col in X_safe.columns:
             try:
-                # Drop NaN for correlation calculation
-                mask = X_numeric[col].notna() & y.notna()
-                if mask.sum() > 10:  # Need enough samples
-                    x_vals = X_numeric.loc[mask, col]
-                    y_vals = y[mask]
-                    corr = np.corrcoef(x_vals, y_vals)[0, 1]
-                    if not np.isnan(corr):
-                        correlations.append((col, abs(corr)))
+                # Use rank correlation to be robust to outliers
+                corr, _ = spearmanr(X_safe[col], y)
+                if not np.isnan(corr):
+                    correlations.append((col, abs(corr)))
             except:
                 continue
 
@@ -519,7 +564,7 @@ class FeatureEngineer:
             logger.warning("Could not calculate correlations")
             return X
 
-        # Sort by absolute correlation
+        # Sort by correlation
         correlations.sort(key=lambda x: x[1], reverse=True)
 
         # Select features above threshold
@@ -528,8 +573,8 @@ class FeatureEngineer:
 
         if not selected_numeric:
             logger.warning(
-                f"No features above threshold {threshold}. Selecting top 10.")
-            selected_numeric = [feat for feat, _ in correlations[:10]]
+                f"No features above threshold {threshold}. Using all numeric features.")
+            selected_numeric = safe_features
 
         # Include categorical features
         selected_features = selected_numeric.copy()
@@ -537,9 +582,12 @@ class FeatureEngineer:
             selected_features.extend(self.categorical_features)
 
         logger.info(f"Selected {len(selected_features)} features")
-        logger.info(f"Top correlated features:")
-        for feat, corr in correlations[:10]:
-            logger.info(f"  {feat}: {corr:.3f}")
+
+        # Log top correlations
+        if correlations:
+            logger.info(f"Top correlated features:")
+            for feat, corr in correlations[:10]:
+                logger.info(f"  {feat}: {corr:.3f}")
 
         return X[selected_features]
 
@@ -641,8 +689,17 @@ class FeatureEngineer:
         filepath = Path(filepath)
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
+        # Save both preprocessor and training stats
+        save_data = {
+            'preprocessor': self.preprocessor,
+            'training_stats': self.training_stats_,
+            'training_columns': self.training_columns_,
+            'numerical_features': self.numerical_features,
+            'categorical_features': self.categorical_features
+        }
+
         with open(filepath, 'wb') as f:
-            pickle.dump(self.preprocessor, f)
+            pickle.dump(save_data, f)
 
         logger.info(f"💾 Saved preprocessor to: {filepath}")
 
@@ -651,7 +708,13 @@ class FeatureEngineer:
         import pickle
 
         with open(filepath, 'rb') as f:
-            self.preprocessor = pickle.load(f)
+            save_data = pickle.load(f)
+
+        self.preprocessor = save_data['preprocessor']
+        self.training_stats_ = save_data.get('training_stats', {})
+        self.training_columns_ = save_data.get('training_columns', [])
+        self.numerical_features = save_data.get('numerical_features', [])
+        self.categorical_features = save_data.get('categorical_features', [])
 
         logger.info(f"📂 Loaded preprocessor from: {filepath}")
 
@@ -686,12 +749,9 @@ if __name__ == "__main__":
         # Identify feature types
         cat_features, num_features = feature_engineer.identify_feature_types(X)
 
-        # Create additional features (with y if available)
-        if y is not None:
-            X_enhanced = feature_engineer.create_additional_features(X, y)
-        else:
-            X_enhanced = feature_engineer.create_additional_features(X)
-
+        # Create additional features WITHOUT target
+        X_enhanced = feature_engineer.create_additional_features(
+            X, is_training=True)
         print(f"\nEnhanced features shape: {X_enhanced.shape}")
 
         # Select features using correlation if y is available
