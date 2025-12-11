@@ -1,0 +1,74 @@
+{
+  "analysis_date": "2025-12-11 20:24:34",
+  "project_info": {
+    "project_root": "D:\\Python\\Week-3\\Insurance-Analytics-Week-3-",
+    "data_file": "D:\\Python\\Week-3\\Insurance-Analytics-Week-3-\\data\\processed\\claim_data_prepared.csv",
+    "dataset_shape": {
+      "rows": 1000093,
+      "columns": 62
+    },
+    "total_policies": 1000093,
+    "policies_with_claims": 2788,
+    "high_claim_policies": 2788
+  },
+  "model_performance": {
+    "regression": {
+      "linear": {
+        "rmse": 1.0311,
+        "r2": 0.6068
+      },
+      "rf": {
+        "rmse": 1.0046,
+        "r2": 0.6268
+      },
+      "xgb": {
+        "rmse": 1.073,
+        "r2": 0.5742
+      }
+    },
+    "classification": {
+      "logistic": {
+        "auc": 0.9953,
+        "accuracy": 0.9975
+      },
+      "rf": {
+        "auc": 0.9891,
+        "accuracy": 0.9982
+      },
+      "xgb": {
+        "auc": 0.9697,
+        "accuracy": 0.9987
+      }
+    }
+  },
+  "best_models": {
+    "regression": {
+      "name": "Random Forest",
+      "r2": 0.6268,
+      "rmse": 1.0046
+    },
+    "classification": {
+      "name": "Logistic Regression",
+      "auc": 0.9953,
+      "accuracy": 0.9975
+    }
+  },
+  "key_findings": [
+    "Random Forest performed best for claim severity prediction (R\u00b2=0.6268)",
+    "All classification models showed excellent performance (AUC > 0.96)",
+    "CatBoost models failed due to NaN handling issues in categorical features",
+    "Logistic regression showed convergence warning (needs more iterations)"
+  ],
+  "recommendations": [
+    "Use Random Forest for production claim severity prediction",
+    "Investigate potential data leakage in classification models",
+    "Fix NaN handling for CatBoost compatibility",
+    "Implement cross-validation for more robust performance estimates",
+    "Consider ensemble methods for improved prediction stability"
+  ],
+  "business_implications": [
+    "Risk-based pricing can be implemented using model predictions",
+    "High-risk profiles can be identified for targeted underwriting",
+    "Premium optimization opportunities exist through better risk assessment"
+  ]
+}

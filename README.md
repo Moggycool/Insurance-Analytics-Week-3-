@@ -116,44 +116,98 @@ Insurance-Analytics-Week-3-
 
 
 
+
 ```
 Insurance-Analytics-Week-3-
 ├─ .dvc
 │  └─ config
 ├─ .dvcignore
+├─ catboost_info
+│  ├─ catboost_training.json
+│  ├─ learn
+│  │  └─ events.out.tfevents
+│  ├─ learn_error.tsv
+│  ├─ time_left.tsv
+│  └─ tmp
 ├─ data
 │  ├─ hypothesis_results
-│  │  ├─ cleaned_dataset.csv
-│  │  ├─ hypothesis_report_20251208_184908.md
-│  │  ├─ hypothesis_report_20251208_184949.md
-│  │  ├─ hypothesis_results_20251208_184908.json
-│  │  ├─ hypothesis_results_20251208_184949.json
-│  │  ├─ hypothesis_results_20251208_191343.json
-│  │  ├─ hypothesis_results_20251208_192221.json
-│  │  ├─ hyp_results_summary.xlsx
-│  │  ├─ hyp_summary.csv
 │  │  └─ visualizations
 │  │     ├─ categorical_distributions.png
-│  │     ├─ hypothesis_results_summary.png
 │  │     └─ numerical_distributions.png
 │  └─ output
 ├─ dvc.lock
 ├─ dvc.yaml
+├─ modeling_pipeline.log
+├─ models
+│  ├─ best_Lasso.pkl
+│  ├─ best_LinearRegression.pkl
+│  ├─ classification
+│  │  ├─ clf_logistic.pkl
+│  │  ├─ clf_rf.pkl
+│  │  ├─ clf_xgb.pkl
+│  │  └─ reg_catboost.pkl
+│  ├─ cross_validation_results.json
+│  ├─ DecisionTree.pkl
+│  ├─ ElasticNet.pkl
+│  ├─ GradientBoosting.pkl
+│  ├─ Lasso.pkl
+│  ├─ Lasso_best_params.json
+│  ├─ Lasso_tuned.pkl
+│  ├─ LightGBM.pkl
+│  ├─ LinearRegression.pkl
+│  ├─ LinearRegression_best_params.json
+│  ├─ LinearRegression_tuned.pkl
+│  ├─ model_comparison.json
+│  ├─ model_comparison_combined.png
+│  ├─ model_comparison_r2.png
+│  ├─ model_metadata.json
+│  ├─ preprocessor.pkl
+│  ├─ RandomForest.pkl
+│  ├─ regression
+│  │  ├─ reg_linear.pkl
+│  │  ├─ reg_rf.pkl
+│  │  └─ reg_xgb.pkl
+│  ├─ Ridge.pkl
+│  └─ XGBoost.pkl
 ├─ notebooks
 │  ├─ eda_analysis.ipynb
-│  └─ hypothesis_eda.ipynb
+│  ├─ hypothesis_eda.ipynb
+│  ├─ modeling.ipynb
+│  └─ reports
+├─ Processed_Data
 ├─ README.md
 ├─ reports
-│  ├─ correlation_matrix.csv
-│  ├─ data_sample.csv
-│  ├─ descriptive_statistics.csv
 │  ├─ eda_summary.txt
 │  └─ outlier_report.json
 ├─ requirements.txt
+├─ Results
+│  ├─ modeling_eda_summary.json
+│  ├─ model_diagnostic_report.json
+│  └─ Task4_Reports
+│     ├─ SHAP_Analysis
+│     ├─ task4_comprehensive_report.json
+│     └─ task4_final_report.md
 ├─ src
 │  ├─ data_preprocessing.py
 │  ├─ eda.py
+│  ├─ hypothesis_testing
+│  │  ├─ data_loader.py
+│  │  ├─ hypothesis_evaluator.py
+│  │  ├─ metrics.py
+│  │  ├─ report_generator.py
+│  │  ├─ runner.py
+│  │  ├─ run_hypothesis.py
+│  │  ├─ segmentation.py
+│  │  ├─ statistical_tests.py
+│  │  └─ __init__.py
 │  ├─ hypothesis_testing.py
+│  ├─ modelling
+│  │  ├─ data_preparation.py
+│  │  ├─ extract_claim.py
+│  │  ├─ featuring.py
+│  │  ├─ main.py
+│  │  ├─ modeling.py
+│  │  └─ prep.py
 │  ├─ utils.py
 │  ├─ visualization.py
 │  └─ __init__.py

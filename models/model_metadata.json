@@ -1,0 +1,16 @@
+{
+  "regression": [
+    "linear",
+    "rf",
+    "xgb"
+  ],
+  "classification": [
+    "logistic",
+    "rf",
+    "xgb"
+  ],
+  "pricing_example": {
+    "notes": "Naive risk-based premium example",
+    "formula": "Premium = P(claim) * E[severity] + expense_loading + profit_margin"
+  }
+}
