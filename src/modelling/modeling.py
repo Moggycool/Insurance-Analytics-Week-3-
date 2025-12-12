@@ -16,12 +16,12 @@ Features:
 Usage (example):
     python modeling_pipeline.py --data data/processed/claim_data_prepared.csv --out models/
 
-Make sure required packages are installed: scikit-learn, pandas, numpy, joblib. For XGBoost/CatBoost/SHAP install optionally.
+Make sure required packages are installed: scikit-learn, pandas, numpy, joblib. 
+For XGBoost/CatBoost/SHAP install optionally.
 """
 
 import argparse
 import logging
-import os
 from pathlib import Path
 import joblib
 import json
@@ -29,7 +29,7 @@ from typing import List, Tuple, Dict
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.metrics import mean_squared_error, r2_score, roc_auc_score, accuracy_score
@@ -43,20 +43,20 @@ from sklearn.impute import SimpleImputer
 try:
     import xgboost as xgb
     HAS_XGB = True
-except Exception:
+except ImportError:
     HAS_XGB = False
 
 try:
-    from catboost import CatBoostRegressor, CatBoostClassifier
+    from catboost import CatBoostRegressor, CatBoostClassifier, CatBoostError
     HAS_CAT = True
 
-except Exception:
+except ImportError:
     HAS_CAT = False
 
 try:
     import shap
     HAS_SHAP = True
-except Exception:
+except ImportError:
     HAS_SHAP = False
 
 FORCE_NO_CATBOOST = True  # Set to False to enable CatBoost
@@ -74,9 +74,9 @@ RANDOM_STATE = 42
 
 def load_data(path: str) -> pd.DataFrame:
     path = Path(path)
-    logger.info(f"Loading prepared data from: {path}")
+    logger.info("Loading prepared data from: %s", path)
     df = pd.read_csv(path, low_memory=False)
-    logger.info(f"Loaded {len(df):,} rows and {df.shape[1]} columns")
+    logger.info("Loaded %d rows and %d columns", len(df), df.shape[1])
     return df
 
 
@@ -121,9 +121,8 @@ def build_preprocessor(df: pd.DataFrame, categorical_limit_onehot: int = 10):
     high_card = [c for c in cat_cols if df[c].nunique() >
                  categorical_limit_onehot]
 
-    logger.info(
-        f"Numeric cols: {len(numeric_cols)}, low-cardinal cats: {len(low_card)}, high-card cats: {len(high_card)}"
-    )
+    logger.info("Numeric cols: %d, low-cardinal cats: %d, high-card cats: %d",
+                len(numeric_cols), len(low_card), len(high_card))
 
     transformers = []
 
@@ -237,7 +236,7 @@ def train_regression_models(X_train, y_train, X_val, y_val, preprocessor, model_
                 'model': cbr
             }
             joblib.dump(cbr, model_dir / 'reg_catboost.pkl')
-        except Exception as e:
+        except (CatBoostError, ValueError, TypeError) as e:
             logger.warning(f"CatBoost train failed: {e}")
 
     # Log results
@@ -308,32 +307,19 @@ def train_classification_models(X_train, y_train, X_val, y_val, preprocessor, mo
                 X_val_cat[col] = X_val_cat[col].astype(
                     str).replace('nan', 'missing')
 
-            logger.info('Training CatBoostRegressor...')
-            cbr = CatBoostRegressor(
-                iterations=500, learning_rate=0.05, random_seed=RANDOM_STATE, verbose=0)
-            cbr.fit(X_train_cat, y_train, cat_features=cat_cols)
-            preds = cbr.predict(X_val_cat)
-            results['catboost'] = {'rmse': np.sqrt(mean_squared_error(y_val, preds)),
-                                   'r2': r2_score(y_val, preds),
-                                   'model': cbr
-                                   }
-            joblib.dump(cbr, model_dir / 'reg_catboost.pkl')
-        except Exception as e:
-            logger.warning(f"CatBoost train failed: {e}")
-
             logger.info('Training CatBoostClassifier...')
             cbc = CatBoostClassifier(
                 iterations=500, learning_rate=0.05, random_seed=RANDOM_STATE, verbose=0)
-            cbc.fit(X_train, y_train, cat_features=cat_cols)
-            preds_proba = cbc.predict_proba(X_val)[:, 1]
-            preds = cbc.predict(X_val)
+            cbc.fit(X_train_cat, y_train, cat_features=cat_cols)
+            preds_proba = cbc.predict_proba(X_val_cat)[:, 1]
+            preds = cbc.predict(X_val_cat)
             results['catboost'] = {
                 'auc': roc_auc_score(y_val, preds_proba),
                 'accuracy': accuracy_score(y_val, preds),
                 'model': cbc
             }
             joblib.dump(cbc, model_dir / 'clf_catboost.pkl')
-        except Exception as e:
+        except (CatBoostError, ValueError, TypeError) as e:
             logger.warning(f"CatBoost classifier failed: {e}")
 
     for name, res in results.items():
